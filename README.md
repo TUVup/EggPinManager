@@ -31,5 +31,5 @@
 - **pins.txt**: PIN과 잔액을 텍스트 형태로 출력하는 파일입니다.
 
 ## 설치 및 실행
-1. [최신 버전 다운로드](https://github.com/TUVup/EggPinManager/releases/tag/v0.1.0)
+1. [최신 버전 다운로드](https://github.com/TUVup/EggPinManager/releases/download/v0.1.0/PinManager_v0.1.zip)
 2. 압축을 풀고 실행.
