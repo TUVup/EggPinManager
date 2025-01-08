@@ -1,4 +1,5 @@
 # EggPinManager
+![image](https://github.com/user-attachments/assets/5fcfd4ac-fcf2-46b4-baec-697013300f1f)
 
 **Pin Manager**는 에그머니의 PIN과 잔액을 손쉽게 관리할 수 있는 Python 기반의 도구입니다. PIN 추가, 삭제, 잔액 갱신, 목록 조회, 총 잔액 확인 등 PIN 관리에 필요한 다양한 기능을 제공합니다. 또한 특정 금액에 맞는 PIN을 자동으로 선택하여 사용할 수 있도록 도와줍니다.
 
