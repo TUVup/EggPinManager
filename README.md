@@ -15,7 +15,8 @@
    - `PIN 삭제`: 기존 PIN을 삭제합니다.
    - `PIN 자동 사용`: 특정 금액에 맞는 PIN을 선택하고 자동 입력을 시작합니다.
    - `종료`: 프로그램을 종료합니다.
-3. 자동입력
+3. 자동 사용
+
    1. 핀 입력창에 제일 첫번째 칸을 클릭하고 기다리면 자동으로 핀 번호를 입력합니다.
    2. 여러개의 핀을 입력해야 할 때 팝업 메시지에 따라 진행합니다.
    3. 입력이 완료된 후 자동으로 마지막 핀에 잔액을 업데이트 합니다.
@@ -28,3 +29,15 @@
 ## 설치 및 실행
 1. [최신 버전 다운로드](https://github.com/TUVup/EggPinManager/releases/download/v1.0.0/EggManager.zip)
 2. 압축을 풀고 실행.
+
+## 빌드 정보
+
+종속성 설치
+- ```
+  pip install pyinstaller pyautogui pyqt5
+  ```
+
+실행파일 빌드
+- ```
+  pyinstaller -w -F EggManager_GUI.py
+  ```
