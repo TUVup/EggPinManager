@@ -66,6 +66,8 @@ class PinManager:
     def update_pin_balance(self, pin, new_balance):
         if pin in self.pins:
             self.pins[pin] = new_balance
+            self.save_pins()
+            self.save_pins_to_txt()
             return True
         return False
 
