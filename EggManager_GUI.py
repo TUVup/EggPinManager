@@ -5,12 +5,16 @@ import re
 import time
 from datetime import datetime
 import pyautogui
+import webbrowser
+import requests
 # from PyQt5.QtWidgets import *
 from PyQt5.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QPushButton, QMessageBox, QInputDialog, QTableWidget, QTableWidgetItem, QLabel, QHBoxLayout, QHeaderView, QMenu, QAction
+    QApplication, QMainWindow, QVBoxLayout, QPushButton, QMessageBox, QInputDialog, QTableWidget, QTableWidgetItem, QLabel, QHBoxLayout, QHeaderView, QMenu, QAction, QDialog, QDialogButtonBox, QWidget
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
+
+current_version = "v1.0.2"
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -99,25 +103,49 @@ class PinManager:
                 return 1
         return 0
 
-class PinManagerApp(QWidget):
+class PinManagerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.manager = PinManager()
         self.initUI()
+        self.auto_check_for_updates() # 프로그램 실행 시 업데이트 체크
 
     def initUI(self):
-        self.setWindowTitle("EggManager 1.0.1")
+        self.setWindowTitle(f"EggManager {current_version}")
         self.setWindowFlag(Qt.WindowStaysOnTopHint)
         self.setGeometry(300, 300, 600, 400)
         ico = resource_path('eggui.ico')
         self.setWindowIcon(QIcon(ico))
-        layout = QVBoxLayout()
+
+        # 메뉴 바 추가
+        menubar = self.menuBar()
+        menubar.setStyleSheet("QMenuBar { background-color: #f0f0f0; }")
+        settings_menu = menubar.addMenu('설정')
+
+        # 프로그램 정보 액션 추가
+        about_action = QAction('프로그램 정보', self)
+        about_action.triggered.connect(self.show_about_dialog)
+        settings_menu.addAction(about_action)
+
+        # GitHub 릴리즈 페이지 액션 추가
+        github_action = QAction('GitHub 페이지', self)
+        github_action.triggered.connect(self.open_github_releases)
+        settings_menu.addAction(github_action)
+
+        # 자동 업데이트 액션 추가
+        update_action = QAction('자동 업데이트', self)
+        update_action.triggered.connect(self.check_for_updates)
+        settings_menu.addAction(update_action)
+
+        # 중앙 위젯 설정
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
 
         # PIN 목록 테이블
         self.table = QTableWidget()
         self.table.setColumnCount(2)
         self.table.setHorizontalHeaderLabels(["PIN 번호", "잔액"])
-        #self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         layout.addWidget(self.table)
@@ -145,9 +173,46 @@ class PinManagerApp(QWidget):
         self.sum = QLabel(f"잔액 : {self.manager.get_total_balance()}", self)
         layout.addWidget(self.sum)
 
-        self.setLayout(layout)
-
         self.update_table()
+
+    def show_about_dialog(self):
+        about_dialog = QDialog(self)
+        about_dialog.setWindowTitle("프로그램 정보")
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel(f"EggManager {current_version}"))
+        layout.addWidget(QLabel("개발자: TUVup"))
+        layout.addWidget(QLabel("이 프로그램은 에그머니 PIN 관리를 위한 도구입니다."))
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok)
+        button_box.accepted.connect(about_dialog.accept)
+        layout.addWidget(button_box)
+        about_dialog.setLayout(layout)
+        about_dialog.exec_()
+
+    def open_github_releases(self):
+        webbrowser.open("https://github.com/TUVup/EggPinManager")
+
+    def check_for_updates(self):
+        try:
+            response = requests.get("https://api.github.com/repos/TUVup/EggPinManager/releases/latest")
+            response.raise_for_status()
+            latest_version = response.json()["tag_name"]
+            if latest_version > current_version:
+                reply = QMessageBox.question(self, "업데이트 확인", f"새 버전 {latest_version}이(가) 있습니다. 업데이트 하시겠습니까?", QMessageBox.Yes | QMessageBox.No)
+                if reply == QMessageBox.Yes:
+                    webbrowser.open("https://github.com/TUVup/EggPinManager/releases/latest")
+            else:
+                QMessageBox.information(self, "업데이트 확인", "현재 최신 버전입니다.")
+        except requests.RequestException as e:
+            QMessageBox.warning(self, "업데이트 확인 실패", f"업데이트 확인 중 오류가 발생했습니다: {e}")
+
+    def auto_check_for_updates(self):
+        response = requests.get("https://api.github.com/repos/TUVup/EggPinManager/releases/latest")
+        response.raise_for_status()
+        latest_version = response.json()["tag_name"]
+        if latest_version > current_version:
+            reply = QMessageBox.question(self, "업데이트 확인", f"새 버전 {latest_version}이(가) 있습니다. 업데이트 하시겠습니까?", QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                webbrowser.open("https://github.com/TUVup/EggPinManager/releases/latest")
 
     def contextMenuEvent(self, event):
         context_menu = QMenu(self)
@@ -267,7 +332,6 @@ class PinManagerApp(QWidget):
                 self.manager.pins[pin] = remaining_balance
                 total_used = amount
             else:
-                # del self.manager.pins[pin]
                 pins_to_delete.append(pin)
                 self.manager.pins[pin] = remaining_balance
                 total_used += balance
