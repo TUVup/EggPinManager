@@ -1,5 +1,6 @@
 # EggPinManager
-![image](https://github.com/user-attachments/assets/86da38f3-04a1-4dab-8064-d5d87326428c)
+![image](https://github.com/user-attachments/assets/cf72bbf9-1664-4966-95dd-f6b4ecc720af)
+
 
 
 
