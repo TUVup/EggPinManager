@@ -1,10 +1,11 @@
 # EggPinManager
-![image](https://github.com/user-attachments/assets/cf72bbf9-1664-4966-95dd-f6b4ecc720af)
+![image](https://github.com/user-attachments/assets/b4855c5d-5db7-4cb2-bda5-1cfb4427ce63)
 
 
 
 
-**EggManager**는 에그머니의 PIN과 잔액을 손쉽게 관리할 수 있는 Python 기반의 도구입니다. PIN 추가, 삭제, 잔액 갱신, 목록 조회, 총 잔액 확인 등 PIN 관리에 필요한 다양한 기능을 제공합니다. 또한 특정 금액에 맞는 PIN을 자동으로 선택하여 사용할 수 있도록 도와줍니다. 현제 인게임 결제창에서만 작동합니다.(v1.0.3)
+
+**EggManager**는 에그머니의 PIN과 잔액을 손쉽게 관리할 수 있는 Python 기반의 도구입니다. PIN 추가, 삭제, 잔액 갱신, 목록 조회, 총 잔액 확인 등 PIN 관리에 필요한 다양한 기능을 제공합니다. 또한 특정 금액에 맞는 PIN을 자동으로 선택하여 사용할 수 있도록 도와줍니다.
 
 *업데이트 하는 방법: exe파일만 교체해 주세요.
 ## 주요 기능
@@ -12,6 +13,7 @@
 - **목록 조회 및 총 잔액 계산**: 모든 PIN과 해당 잔액을 출력하고 전체 잔액을 계산합니다.
 - **금액에 맞는 PIN 자동 선택**: 특정 금액에 맞는 PIN을 자동으로 선택하고 입력할 수 있도록 지원합니다.
 - **자동 입력 기능**: 선택한 PIN을 자동으로 브라우저에 입력할 수 있습니다.
+- **핀 복구 기능**: log파일에서 사용된 핀을 복구합니다.
 - **우클릭 메뉴**: 우클릭 메뉴로 쉽게 관리할 수 있습니다.
 
   주기적으로 pins.txt를 백업해 주세요.
@@ -21,6 +23,7 @@
    - `PIN 추가`: 새로운 PIN을 추가합니다.
    - `PIN 삭제`: 기존 PIN을 삭제합니다.
    - `PIN 자동 사용`: 특정 금액에 맞는 PIN을 선택하고 자동 입력을 시작합니다.
+   - `PIN 복구`: 직전에 사용된 PIN을 복구합니다.
    - `종료`: 프로그램을 종료합니다.
   
 3. 우클릭 메뉴
@@ -43,7 +46,7 @@
 - **pin_usage_log.txt**: 직전의 PIN 사용내역을 로그로 남깁니다.
 
 ## 설치 및 실행
-1. [최신 버전 다운로드(v1.0.3)](https://github.com/TUVup/EggPinManager/releases/download/v1.0.3/EggManager_1.0.3.zip)
+1. [최신 버전 다운로드(v1.0.4)](https://github.com/TUVup/EggPinManager/releases/download/v1.0.4/EggManager_1.0.4.zip)
 2. 압축을 풀고 실행.
 
 ## 빌드 정보
@@ -55,5 +58,5 @@
 
 실행파일 빌드
 - ```
-  pyinstaller -w -F EggManager_GUI.py
+  pyinstaller -w -F --uac=admin EggManager_GUI.py
   ```
