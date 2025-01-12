@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 
-current_version = "v1.0.3"
+current_version = "v1.0.4"
 
 # Windows API 함수 로드
 user32 = ctypes.windll.user32
@@ -31,6 +31,7 @@ class PinManager:
         self.filename = filename
         self.pins = self.load_pins()
         self.txt_filename = txt_filename
+        self.log_filename = "pin_usage_log.txt"
 
     def load_pins(self):
         try:
@@ -47,6 +48,25 @@ class PinManager:
         with open(self.txt_filename, "w") as file:
             for idx, (pin, balance) in enumerate(self.pins.items(), start=1):
                 file.write(f"{idx}. {pin}: {balance}\n")
+
+    # 로그 파일로부터 PIN과 원금을 사용하여 PIN 목록을 복구하는 함수
+    def load_pins_from_log(self):
+        try:
+            with open(self.log_filename, "r") as log_file:
+                log_lines = log_file.readlines()
+                for line in log_lines:
+                    match = re.search(r'(\d{5}-\d{5}-\d{5}-\d{5}) \[원금: (\d+)\]', line)
+                    if match:
+                        pin = match.group(1)
+                        original_balance = int(match.group(2))
+                        self.pins[pin] = original_balance
+            self.save_pins()
+            self.save_pins_to_txt()
+            return "PIN 목록이 성공적으로 복구되었습니다."
+        except FileNotFoundError:
+            return "로그 파일을 찾을 수 없습니다."
+        except Exception as e:
+            return f"오류가 발생했습니다: {e}"
 
     def add_pin(self, pin, balance):
         self.pins[pin] = balance
@@ -178,13 +198,9 @@ class PinManagerApp(QMainWindow):
         btn_use.clicked.connect(self.use_pins)
         button_layout.addWidget(btn_use)
 
-        remove_all_0 = QPushButton("잔액이 0인 PIN 삭제", self)
-        remove_all_0.clicked.connect(self.remove_all_0) # 잔액 0인 핀 삭제
-        button_layout.addWidget(remove_all_0)
-
-        # btn_quit = QPushButton("종료", self)
-        # btn_quit.clicked.connect(self.close)
-        # button_layout.addWidget(btn_quit)
+        btn_restore = QPushButton("PIN 복구", self)
+        btn_restore.clicked.connect(self.restore_pins)
+        button_layout.addWidget(btn_restore)
 
         layout.addLayout(button_layout)
 
@@ -192,9 +208,6 @@ class PinManagerApp(QMainWindow):
         self.sum = QLabel(f"잔액 : {self.manager.get_total_balance()}", self)
         bottom_layout.addWidget(self.sum)
 
-        # remove_all_0 = QPushButton("잔액 0 삭제", self)
-        # remove_all_0.clicked.connect(self.remove_all_0) # 잔액 0인 핀 삭제
-        # bottom_layout.addWidget(remove_all_0)
         bottom_layout.addStretch(1)
 
         btn_quit = QPushButton("종료", self)
@@ -248,19 +261,12 @@ class PinManagerApp(QMainWindow):
             reply = QMessageBox.question(self, "업데이트 확인", f"새 버전 {latest_version}이(가) 있습니다. 업데이트 하시겠습니까?", QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
                 webbrowser.open("https://github.com/TUVup/EggPinManager/releases/latest")
-
-    def remove_all_0(self):
-        # 잔액이 0인 모든 PIN을 삭제하는 함수
-        pins_to_delete = [pin for pin, balance in self.manager.pins.items() if balance == 0]
-        if not pins_to_delete:
-            QMessageBox.information(self, "삭제 완료", "잔액이 0인 PIN이 없습니다.")
-            return
-        for pin in pins_to_delete:
-            del self.manager.pins[pin]
-        self.manager.save_pins()
-        self.manager.save_pins_to_txt()
+    
+    # PIN 목록을 로그 파일로부터 복구하는 함수
+    def restore_pins(self):
+        result = self.manager.load_pins_from_log()
+        QMessageBox.information(self, "PIN 복구", result)
         self.update_table()
-        QMessageBox.information(self, "삭제 완료", "잔액이 0인 모든 PIN이 삭제되었습니다.")
 
     # 테이블 위젯에 컨텍스트 메뉴 추가
     def contextMenuEvent(self, event):
@@ -352,11 +358,71 @@ class PinManagerApp(QMainWindow):
 
     # PIN 자동 사용 기능
     def use_pins(self):
-        amount, ok = QInputDialog.getInt(self, "PIN 자동 사용", "사용할 금액 입력:")
-        if ok and amount > 0:
-            result = self.use_pins_auto(amount)
-            QMessageBox.information(self, "결과", result)
-            self.update_table()
+        # 사용 방법 선택 다이얼로그
+        selectbox = QMessageBox(self)
+        selectbox.setIcon(QMessageBox.Question)
+        selectbox.setWindowTitle("PIN 자동 사용")
+        selectbox.setText("\n사용 방법을 선택하세요.\n")
+        browser = QPushButton("브라우저")
+        ingame = QPushButton("게임(하오플레이이)")
+        cancel = QPushButton("취소")
+        selectbox.addButton(browser, QMessageBox.AcceptRole)
+        selectbox.addButton(ingame, QMessageBox.AcceptRole)
+        selectbox.addButton(cancel, QMessageBox.RejectRole)
+
+        selectbox.exec()
+        
+        clicked_button = selectbox.clickedButton()
+
+        if clicked_button == ingame:
+            amount, ok = QInputDialog.getInt(self, "PIN 자동 사용", "사용할 금액 입력:")
+            if ok and amount > 0:
+                result = self.use_pins_auto(amount)
+                QMessageBox.information(self, "결과", result)
+                self.update_table()
+        elif clicked_button == browser:
+            amount, ok = QInputDialog.getInt(self, "PIN 자동 사용", "사용할 금액 입력:")
+            if ok and amount > 0:
+                result = self.use_pins_browser(amount)
+                QMessageBox.information(self, "결과", result)
+                self.update_table()
+        
+    def use_pins_browser(self, amount):
+        if amount > 250000:
+            return "한번에 최대 250,000원까지만 사용할 수 있습니다."
+        selected_pins = self.manager.find_pins_for_amount(amount)
+        if not selected_pins:
+            return "충분한 잔액이 없습니다."
+        if len(selected_pins) > 5:
+            return f"{len(selected_pins)}개의 핀이 사용됩니다.\n핀은 최대 5개만 사용할 수 있습니다."
+        
+        QMessageBox.information(self, "준비", f"{amount}원을 사용하기 위해 {len(selected_pins)}개의 PIN을 사용합니다.")
+        if len(selected_pins) > 1:
+            QMessageBox.information(self, "준비", f"핀 입력창을 {len(selected_pins)-1}개 추가해 주세요.")
+        QMessageBox.information(self, "준비", "첫번째 핀 입력창의 첫번째 칸을 클릭하고 PIN이 입력될 준비를 하세요.\n3초 후 시작합니다.")
+        time.sleep(3)
+        total_used = 0
+        new_log_entry = ""
+        for pin, balance in selected_pins:
+            if total_used >= amount:
+                break
+            pyautogui.write(pin.replace("-", ""))  # PIN 입력
+            used_amount = min(balance, amount - total_used)
+            remaining_balance = balance - used_amount
+            # 사용한 PIN 정보를 로그에 기록
+            new_log_entry += f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} : {pin} [원금: {balance}] [사용된 금액: {used_amount}] [남은 잔액: {remaining_balance}]\n"
+            if remaining_balance > 0:
+                self.manager.pins[pin] = remaining_balance
+                total_used = amount
+            else:
+                del self.manager.pins[pin]
+                total_used += balance
+
+        self.log_pin_usage(new_log_entry)
+        self.manager.save_pins()
+        self.manager.save_pins_to_txt()
+
+        return "PIN 사용이 완료되었습니다."
 
     # PIN 자동 사용 기능
     def use_pins_auto(self, amount):
@@ -371,7 +437,6 @@ class PinManagerApp(QMainWindow):
         original_clipboard = pyperclip.paste()
         total_used = 0
         new_log_entry = ""
-        pins_to_delete = []
         try:
             # 1️⃣ HAOPLAY 창 핸들 찾기
             haoplay_hwnd = user32.FindWindowW(None, "HAOPLAY")
@@ -437,21 +502,12 @@ class PinManagerApp(QMainWindow):
                 self.manager.pins[pin] = remaining_balance
                 total_used = amount
             else:
-                pins_to_delete.append(pin)
-                self.manager.pins[pin] = remaining_balance
+                del self.manager.pins[pin]
                 total_used += balance
 
         self.log_pin_usage(new_log_entry)
         self.manager.save_pins()
         self.manager.save_pins_to_txt()
-
-        if pins_to_delete:
-            cancel = QMessageBox.warning(self, "삭제 확인", "잔액이 0인 PIN을 삭제하시겠습니까?", QMessageBox.Yes | QMessageBox.No)
-            if cancel == QMessageBox.Yes:
-                for pin in pins_to_delete:
-                    del self.manager.pins[pin]
-                self.manager.save_pins()
-                self.manager.save_pins_to_txt()
 
         return "PIN 사용이 완료되었습니다."
     
