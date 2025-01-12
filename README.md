@@ -53,7 +53,7 @@
 
 종속성 설치
 - ```
-  pip install pyinstaller pyautogui pyqt5
+  pip install pyinstaller pyautogui pyqt5 pyperclip
   ```
 
 실행파일 빌드
