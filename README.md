@@ -46,7 +46,7 @@
 - **pin_usage_log.txt**: 직전의 PIN 사용내역을 로그로 남깁니다.
 
 ## 설치 및 실행
-1. [최신 버전 다운로드(v1.0.4)](https://github.com/TUVup/EggPinManager/releases/latest)
+1. [최신 버전 다운로드](https://github.com/TUVup/EggPinManager/releases/latest)
 2. 압축을 풀고 실행.
 
 ## 빌드 정보
