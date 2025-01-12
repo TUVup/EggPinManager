@@ -3,6 +3,8 @@ import sys
 import os
 import re
 import time
+import ctypes, pyperclip
+from itertools import combinations
 from datetime import datetime
 import pyautogui
 import webbrowser
@@ -14,7 +16,10 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 
-current_version = "v1.0.2"
+current_version = "v1.0.3"
+
+# Windows API 함수 로드
+user32 = ctypes.windll.user32
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -53,6 +58,9 @@ class PinManager:
         if len(pin) == 20 and pin.isdigit():
             return f"{pin[:5]}-{pin[5:10]}-{pin[10:15]}-{pin[15:]}"
         return pin
+    
+    def unformat_pin(self, formatted_pin):
+        return formatted_pin.replace("-", "")
 
     def is_valid_pin_format(self, pin):
         pattern = re.compile(r'^\d{5}-\d{5}-\d{5}-\d{5}$')
@@ -83,17 +91,21 @@ class PinManager:
 
     def find_pins_for_amount(self, amount):
         sorted_pins = sorted(self.pins.items(), key=lambda x: x[1])
-        selected_pins = []
-        total_selected = 0
 
-        for pin, balance in sorted_pins:
-            if total_selected >= amount:
-                break
-            selected_pins.append((pin, balance))
-            total_selected += balance
+        best_combination = []
+        best_total = 0
 
-        if total_selected >= amount:
-            return selected_pins
+        # 가능한 모든 조합을 고려하여 최적의 조합을 찾음
+        for r in range(1, 6):
+            for combination in combinations(sorted_pins, r):
+                total = sum(balance for pin, balance in combination)
+                if total >= amount and (best_total == 0 or total < best_total):
+                    best_combination = combination
+                    best_total = total
+
+        if best_total >= amount:
+            return best_combination
+    
         return []
     
     def pin_check(self, pin):
@@ -102,18 +114,20 @@ class PinManager:
             if pins == pin:
                 return 1
         return 0
-
+    
 class PinManagerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.manager = PinManager()
-        self.initUI()
         self.auto_check_for_updates() # 프로그램 실행 시 업데이트 체크
+        self.initUI()
 
     def initUI(self):
+        # UI 초기화 및 설정
         self.setWindowTitle(f"EggManager {current_version}")
-        self.setWindowFlag(Qt.WindowStaysOnTopHint)
-        self.setGeometry(300, 300, 600, 400)
+        # self.setWindowFlag(Qt.WindowStaysOnTopHint)
+        # self.setGeometry(300, 300, 600, 400)
+        self.setMinimumSize(600, 400)
         ico = resource_path('eggui.ico')
         self.setWindowIcon(QIcon(ico))
 
@@ -164,18 +178,36 @@ class PinManagerApp(QMainWindow):
         btn_use.clicked.connect(self.use_pins)
         button_layout.addWidget(btn_use)
 
-        btn_quit = QPushButton("종료", self)
-        btn_quit.clicked.connect(self.close)
-        button_layout.addWidget(btn_quit)
+        remove_all_0 = QPushButton("잔액이 0인 PIN 삭제", self)
+        remove_all_0.clicked.connect(self.remove_all_0) # 잔액 0인 핀 삭제
+        button_layout.addWidget(remove_all_0)
+
+        # btn_quit = QPushButton("종료", self)
+        # btn_quit.clicked.connect(self.close)
+        # button_layout.addWidget(btn_quit)
 
         layout.addLayout(button_layout)
 
+        bottom_layout = QHBoxLayout()
         self.sum = QLabel(f"잔액 : {self.manager.get_total_balance()}", self)
-        layout.addWidget(self.sum)
+        bottom_layout.addWidget(self.sum)
+
+        # remove_all_0 = QPushButton("잔액 0 삭제", self)
+        # remove_all_0.clicked.connect(self.remove_all_0) # 잔액 0인 핀 삭제
+        # bottom_layout.addWidget(remove_all_0)
+        bottom_layout.addStretch(1)
+
+        btn_quit = QPushButton("종료", self)
+        btn_quit.clicked.connect(self.close)
+        bottom_layout.addWidget(btn_quit)
+
+        layout.addLayout(bottom_layout)
 
         self.update_table()
 
+    # 프로그램 정보 다이얼로그
     def show_about_dialog(self):
+        # 프로그램 정보 대화 상자 표시
         about_dialog = QDialog(self)
         about_dialog.setWindowTitle("프로그램 정보")
         layout = QVBoxLayout()
@@ -187,10 +219,12 @@ class PinManagerApp(QMainWindow):
         layout.addWidget(button_box)
         about_dialog.setLayout(layout)
         about_dialog.exec_()
-
+    
     def open_github_releases(self):
+        # GitHub 릴리즈 페이지 열기
         webbrowser.open("https://github.com/TUVup/EggPinManager")
 
+    # GitHub에서 최신 릴리즈 정보를 확인하고 업데이트 여부를 묻는 기능
     def check_for_updates(self):
         try:
             response = requests.get("https://api.github.com/repos/TUVup/EggPinManager/releases/latest")
@@ -205,6 +239,7 @@ class PinManagerApp(QMainWindow):
         except requests.RequestException as e:
             QMessageBox.warning(self, "업데이트 확인 실패", f"업데이트 확인 중 오류가 발생했습니다: {e}")
 
+    # 프로그램 실행 시 자동으로 업데이트를 체크하는 기능
     def auto_check_for_updates(self):
         response = requests.get("https://api.github.com/repos/TUVup/EggPinManager/releases/latest")
         response.raise_for_status()
@@ -214,6 +249,20 @@ class PinManagerApp(QMainWindow):
             if reply == QMessageBox.Yes:
                 webbrowser.open("https://github.com/TUVup/EggPinManager/releases/latest")
 
+    def remove_all_0(self):
+        # 잔액이 0인 모든 PIN을 삭제하는 함수
+        pins_to_delete = [pin for pin, balance in self.manager.pins.items() if balance == 0]
+        if not pins_to_delete:
+            QMessageBox.information(self, "삭제 완료", "잔액이 0인 PIN이 없습니다.")
+            return
+        for pin in pins_to_delete:
+            del self.manager.pins[pin]
+        self.manager.save_pins()
+        self.manager.save_pins_to_txt()
+        self.update_table()
+        QMessageBox.information(self, "삭제 완료", "잔액이 0인 모든 PIN이 삭제되었습니다.")
+
+    # 테이블 위젯에 컨텍스트 메뉴 추가
     def contextMenuEvent(self, event):
         context_menu = QMenu(self)
 
@@ -231,6 +280,7 @@ class PinManagerApp(QMainWindow):
 
         context_menu.exec_(self.mapToGlobal(event.pos()))
 
+    # 테이블에서 선택된 핀을 삭제하는 기능
     def delete_selected_pin(self):
         selected_items = self.table.selectedItems()
         if selected_items:
@@ -240,6 +290,7 @@ class PinManagerApp(QMainWindow):
                 self.manager.delete_pin(pin)
                 self.update_table()
     
+    # 테이블에서 선택된 핀의 잔액을 수정하는 기능
     def edit_selected_pin_balance(self):
         selected_items = self.table.selectedItems()
         if selected_items:
@@ -256,6 +307,7 @@ class PinManagerApp(QMainWindow):
                 QMessageBox.information(self, "성공", "잔액 수정이 완료되었습니다.")
                 self.update_table()
 
+    # 테이블을 업데이트하는 기능
     def update_table(self):
         self.sum.setText(f"잔액 : {self.manager.get_total_balance()}")
         pins = self.manager.list_pins()
@@ -266,6 +318,7 @@ class PinManagerApp(QMainWindow):
             self.table.setItem(row, 1, QTableWidgetItem(str(balance)))
             self.table.item(row, 1).setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
 
+    # PIN 추가 다이얼로그
     def add_pin(self):
         pin, ok = QInputDialog.getText(self, "PIN 추가", "PIN 입력 (핀 전체 또는 숫자만 입력):")
         pin = self.manager.format_pin(pin)
@@ -284,6 +337,7 @@ class PinManagerApp(QMainWindow):
             elif not balance:
                 QMessageBox.warning(self, "금액 오류", "금액은 반드시 입력해야 합니다.")
 
+    # PIN 삭제 다이얼로그
     def delete_pin(self):
         pin, ok = QInputDialog.getText(self, "PIN 삭제", "삭제할 PIN 입력:")
         if ok and pin:
@@ -296,6 +350,7 @@ class PinManagerApp(QMainWindow):
                     QMessageBox.information(self, "결과", result)
                     self.update_table()
 
+    # PIN 자동 사용 기능
     def use_pins(self):
         amount, ok = QInputDialog.getInt(self, "PIN 자동 사용", "사용할 금액 입력:")
         if ok and amount > 0:
@@ -303,6 +358,7 @@ class PinManagerApp(QMainWindow):
             QMessageBox.information(self, "결과", result)
             self.update_table()
 
+    # PIN 자동 사용 기능
     def use_pins_auto(self, amount):
         if amount > 250000:
             return "한번에 최대 250,000원까지만 사용할 수 있습니다."
@@ -311,19 +367,68 @@ class PinManagerApp(QMainWindow):
             return "충분한 잔액이 없습니다."
         if len(selected_pins) > 5:
             return f"{len(selected_pins)}개의 핀이 사용됩니다.\n핀은 최대 5개만 사용할 수 있습니다."
-        
-        QMessageBox.information(self, "준비", f"{amount}원을 사용하기 위해 {len(selected_pins)}개의 PIN을 사용합니다.")
-        if len(selected_pins) > 1:
-            QMessageBox.information(self, "준비", f"핀 입력창을 {len(selected_pins)-1}개 추가해 주세요.")
-        QMessageBox.information(self, "준비", "첫번째 핀 입력창의 첫번째 칸을 클릭하고 PIN이 입력될 준비를 하세요.\n3초 후 시작합니다.")
-        time.sleep(3)
+        # 현재 클립보드 데이터 저장
+        original_clipboard = pyperclip.paste()
         total_used = 0
         new_log_entry = ""
         pins_to_delete = []
+        try:
+            # 1️⃣ HAOPLAY 창 핸들 찾기
+            haoplay_hwnd = user32.FindWindowW(None, "HAOPLAY")
+            if not haoplay_hwnd:
+                # print("❌ HAOPLAY 창을 찾을 수 없습니다.")
+                return "❌ HAOPLAY 창을 찾을 수 없습니다."
+
+            # 2️⃣ "Chrome_WidgetWin_0" 컨트롤 핸들 찾기 (웹뷰 컨트롤)
+            webview_hwnd = user32.FindWindowExW(haoplay_hwnd, 0, "Chrome_WidgetWin_0", None)
+            if not webview_hwnd:
+                # print("❌ 웹뷰 컨트롤을 찾을 수 없습니다.")
+                return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
+
+            # print(f"✅ 웹뷰 컨트롤 핸들 찾음: {webview_hwnd}")
+
+            # 3️⃣ 창 활성화 (child_hWnd로 변경)
+            user32.SetForegroundWindow(webview_hwnd)  # 웹뷰 컨트롤을 최상위로 활성화
+            time.sleep(0.5)  # 안정성을 위해 대기
+            
+            pyautogui.hotkey('ctrl', 'shift', 'j')  # DevTools 열기
+            time.sleep(1)
+            pyautogui.hotkey('ctrl', '`') # Console 탭으로 이동
+            time.sleep(0.2)
+            pyautogui.typewrite("allow pasting") # allow pasting 입력
+            pyautogui.press('enter') # allow pasting 입력
+            time.sleep(0.1)
+
+            # 목록에서 최대 5개의 핀번호를 가져옴
+            pins_to_inject = [selected_pins[i][0] for i in range(min(5, len(selected_pins)))]
+
+            # 4️⃣ 핀번호를 입력박스에 추가
+            self.add_pin_input_box(len(pins_to_inject))
+            time.sleep(0.2)
+
+
+
+            # 5️⃣ 핀번호들 자바스크립트를 통해 입력
+            self.inject_pin_codes(pins_to_inject)
+
+            # 모두 동의
+            self.click_all_agree()
+
+            # 제출
+            self.submit()
+
+        except Exception as e:
+            return "❌ 자동 입력에 실패했습니다."
+
+        finally:
+            # 클립보드 데이터 원래 값으로 복원
+            pyperclip.copy(original_clipboard)
+            # print("✅ 클립보드 복원 완료.")
+
+        # 사용한 핀의 잔액을 갱신하고 사용한 핀을 삭제
         for pin, balance in selected_pins:
             if total_used >= amount:
                 break
-            pyautogui.write(pin.replace("-", ""))  # PIN 입력
             used_amount = min(balance, amount - total_used)
             remaining_balance = balance - used_amount
             # 사용한 PIN 정보를 로그에 기록
@@ -350,9 +455,66 @@ class PinManagerApp(QMainWindow):
 
         return "PIN 사용이 완료되었습니다."
     
+    # PIN 사용 로그를 파일에 기록하는 기능
     def log_pin_usage(self, new_log_entry):
         with open("pin_usage_log.txt", "w") as log_file:
             log_file.write(new_log_entry)
+    
+    # 핀을 입력할 박스를 추가하는 기능
+    def add_pin_input_box(self, num):
+        if num < 1:
+            return
+
+        # 5️⃣ 자바스크립트 코드 준비
+        javascript_code = f'''
+            while(document.querySelector("input[name='pyo_cnt']").value < {num})
+                PinBoxInsert('pyo_cnt');
+        '''
+        self.paste_javascript_code(javascript_code)
+    
+    # javascript 코드를 붙여넣는 기능
+    def inject_pin_codes(self, pins: list[str]):
+        if pins is None or len(pins) == 0:
+            return
+
+        arr = [item for pin in pins for item in pin.split("-")]
+        arr_text = f"['{"', '".join(arr)}']"
+        # 5️⃣ 자바스크립트 코드 준비
+        javascript_code = '''
+            let i = 0;
+            arr = arr_text;
+            document.querySelectorAll("#pinno").forEach(obj => {
+                obj.querySelectorAll("input").forEach(input => {
+                    input.value = arr[i++];
+                })
+            })
+        '''.replace("arr_text", arr_text)
+        self.paste_javascript_code(javascript_code)
+    
+    # javascript 코드를 붙여넣는 기능
+    def paste_javascript_code(self, javascript_code):
+        # 6️⃣ 클립보드에 자바스크립트 코드 복사 (pyperclip 사용)
+        pyperclip.copy(javascript_code)
+        # print(f"✅ 자바스크립트 코드 클립보드에 복사 완료.\n{pyperclip.paste()}")
+
+        pyautogui.hotkey('ctrl', 'v')
+        time.sleep(0.2)
+
+        # 8️⃣ Enter 키 입력 (자바스크립트 실행)
+        pyautogui.press('enter')
+        time.sleep(0.1)
+
+        # print("✅ 자바스크립트 실행 완료.")
+
+    def click_all_agree(self):
+        javascript_code = 'document.querySelector("#all-agree").click()'
+        self.paste_javascript_code(javascript_code)
+
+
+    def submit(self):
+        javascript_code = 'goSubmit(document.form)'
+        self.paste_javascript_code(javascript_code)
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
