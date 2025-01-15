@@ -37,6 +37,9 @@
    자동 사용시 복사 붙여넣기가 되지 않으면 ctrl+shitf+j를 눌러 콘솔창을 띄운뒤 allow pasting 을 입력하고 엔터를 누르면 붙여넣기가 가능해집니다.
 
 5. 설정:
+   
+   ![image](https://github.com/user-attachments/assets/a937f99f-1a89-4adc-85ae-19b7dcf53d9e)
+
    - `프로그램 정보`: 프로그램 정보를 보여줍니다.
    - `Github 페이지`: 깃허브 페이지 바로가기.
    - `업데이트 확인`: 최신 업데이트를 확인합니다.
