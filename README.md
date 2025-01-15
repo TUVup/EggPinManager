@@ -1,9 +1,5 @@
 # EggPinManager
-![image](https://github.com/user-attachments/assets/b4855c5d-5db7-4cb2-bda5-1cfb4427ce63)
-
-
-
-
+![image](https://github.com/user-attachments/assets/af067f22-4f32-4649-a239-2ea4acd8f791)
 
 **EggManager**는 에그머니의 PIN과 잔액을 손쉽게 관리할 수 있는 Python 기반의 도구입니다. PIN 추가, 삭제, 잔액 갱신, 목록 조회, 총 잔액 확인 등 PIN 관리에 필요한 다양한 기능을 제공합니다. 또한 특정 금액에 맞는 PIN을 자동으로 선택하여 사용할 수 있도록 도와줍니다.
 
@@ -40,10 +36,18 @@
   
    자동 사용시 복사 붙여넣기가 되지 않으면 ctrl+shitf+j를 눌러 콘솔창을 띄운뒤 allow pasting 을 입력하고 엔터를 누르면 붙여넣기가 가능해집니다.
 
+5. 설정:
+   - `프로그램 정보`: 프로그램 정보를 보여줍니다.
+   - `Github 페이지`: 깃허브 페이지 바로가기.
+   - `업데이트 확인`: 최신 업데이트를 확인합니다.
+   - **`실행시 자동 업데이트 확인`**: 프로그램 실행시 자동으로 업데이트를 확인할지 선택합니다.
+   - **`결제창 자동 최종 결제`**: 게임(하오플레이) 자동사용 기능을 쓸 때 자동으로 최종 결제까지 진행할지 선택합니다. 기본 선택 - 결제 안함
+
 ## 파일 관리
 - **pins.json**: PIN과 잔액 정보를 저장하는 파일입니다.
 - **pins.txt**: PIN과 잔액을 텍스트 형태로 출력하는 파일입니다.
 - **pin_usage_log.txt**: 직전의 PIN 사용내역을 로그로 남깁니다.
+- **config.ini**: 설정이 저장된 파일입니다.
 
 ## 설치 및 실행
 1. [최신 버전 다운로드](https://github.com/TUVup/EggPinManager/releases/latest)
