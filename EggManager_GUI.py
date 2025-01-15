@@ -10,16 +10,31 @@ import pyautogui
 import webbrowser
 import requests
 # from PyQt5.QtWidgets import *
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QVBoxLayout, QPushButton, QMessageBox, QInputDialog, QTableWidget, QTableWidgetItem, QLabel, QHBoxLayout, QHeaderView, QMenu, QAction, QDialog, QDialogButtonBox, QWidget
-)
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
+# # from PyQt5.QtWidgets import (
+# #     QApplication, QMainWindow, QVBoxLayout, QPushButton, QMessageBox, QInputDialog, QTableWidget, QTableWidgetItem, QLabel, QHBoxLayout, QHeaderView, QMenu, QAction, QDialog, QDialogButtonBox, QWidget, QCheckBox
+# # )
+# from PyQt5.QtCore import Qt
+# from PyQt5.QtGui import QIcon, QFont
+from PySide6.QtWidgets import *
+from PySide6.QtCore import *
+from PySide6.QtGui import *
+import configparser as cp
 
-current_version = "v1.0.4"
+current_version = "v1.0.5"
+config = cp.ConfigParser()
 
 # Windows API 함수 로드
 user32 = ctypes.windll.user32
+
+def config_read():
+    if not config.read('config.ini'):
+        # print("설정 파일을 찾을 수 없습니다. 새로운 설정 파일을 생성합니다.")
+        config['DEFAULT'] = {'pin_file': 'pins.json', 'txt_file': 'pins.txt', 'log_file': 'pin_usage_log.txt'}
+        config['SETTING'] = {'auto_update': 'True', 'auto_submit': 'False'}
+        with open('config.ini', 'w', encoding='utf-8') as configfile:
+            config.write(configfile)
+        config.read('config.ini')
+    return config
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -27,11 +42,11 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 class PinManager:
-    def __init__(self, filename="pins.json", txt_filename="pins.txt"):
-        self.filename = filename
+    def __init__(self):
+        self.filename = config["DEFAULT"]['pin_file']
         self.pins = self.load_pins()
-        self.txt_filename = txt_filename
-        self.log_filename = "pin_usage_log.txt"
+        self.txt_filename = config["DEFAULT"]['txt_file']
+        self.log_filename = config["DEFAULT"]['log_file']
 
     def load_pins(self):
         try:
@@ -111,20 +126,34 @@ class PinManager:
 
     def find_pins_for_amount(self, amount):
         sorted_pins = sorted(self.pins.items(), key=lambda x: x[1])
-
+        selected_pins = []
+        total_selected = 0
         best_combination = []
         best_total = 0
 
-        # 가능한 모든 조합을 고려하여 최적의 조합을 찾음
-        for r in range(1, 6):
-            for combination in combinations(sorted_pins, r):
-                total = sum(balance for pin, balance in combination)
-                if total >= amount and (best_total == 0 or total < best_total):
-                    best_combination = combination
-                    best_total = total
+        # print("Sorted pins: ", sorted_pins)
 
-        if best_total >= amount:
-            return best_combination
+        for pin, balance in sorted_pins:
+            if total_selected >= amount:
+                break
+            selected_pins.append((pin, balance))
+            total_selected += balance
+
+        if total_selected >= amount and len(selected_pins) <= 5:
+            # print("Selected pins: ", selected_pins)
+            return selected_pins
+        else:
+            # 가능한 모든 조합을 고려하여 최적의 조합을 찾음
+            for r in range(1, 6):
+                for combination in combinations(sorted_pins, r):
+                    total = sum(balance for pin, balance in combination)
+                    if total >= amount and (best_total == 0 or total < best_total):
+                        best_combination = combination
+                        best_total = total
+
+            if best_total >= amount:
+                # print("Best combination: ", best_combination)
+                return best_combination
     
         return []
     
@@ -139,7 +168,9 @@ class PinManagerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.manager = PinManager()
-        self.auto_check_for_updates() # 프로그램 실행 시 업데이트 체크
+        if config['SETTING']['auto_update'] == 'True':
+            # print("자동 업데이트가 활성화되어 있습니다.")
+            self.auto_check_for_updates() # 프로그램 실행 시 업데이트 체크
         self.initUI()
 
     def initUI(self):
@@ -153,7 +184,7 @@ class PinManagerApp(QMainWindow):
 
         # 메뉴 바 추가
         menubar = self.menuBar()
-        menubar.setStyleSheet("QMenuBar { background-color: #f0f0f0; }")
+        # menubar.setStyleSheet("QMenuBar { background-color: #f0f0f0; }")
         settings_menu = menubar.addMenu('설정')
 
         # 프로그램 정보 액션 추가
@@ -166,10 +197,23 @@ class PinManagerApp(QMainWindow):
         github_action.triggered.connect(self.open_github_releases)
         settings_menu.addAction(github_action)
 
-        # 자동 업데이트 액션 추가
-        update_action = QAction('자동 업데이트', self)
+        # 업데이트 액션 추가
+        update_action = QAction('업데이트 확인', self)
         update_action.triggered.connect(self.check_for_updates)
         settings_menu.addAction(update_action)
+        settings_menu.addSeparator()
+
+        # 자동 업데이트 확인 액션 추가
+        settings_update = QAction('실행시 자동 업데이트 확인', self, checkable=True)
+        settings_update.setChecked(config['SETTING']['auto_update'] == 'True')
+        settings_update.triggered.connect(self.update_settings_change)
+        settings_menu.addAction(settings_update)
+
+        # 자동 제출 확인 액션 추가 
+        settings_submit = QAction('결제창 자동 최종 결제', self, checkable=True)
+        settings_submit.setChecked(config['SETTING']['auto_submit'] == 'True')
+        settings_submit.triggered.connect(self.auto_submit_settings_change)
+        settings_menu.addAction(settings_submit)
 
         # 중앙 위젯 설정
         central_widget = QWidget()
@@ -181,6 +225,8 @@ class PinManagerApp(QMainWindow):
         self.table.setColumnCount(2)
         self.table.setHorizontalHeaderLabels(["PIN 번호", "잔액"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.horizontalHeader().sectionClicked.connect(self.sort_pins)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         layout.addWidget(self.table)
 
@@ -188,18 +234,22 @@ class PinManagerApp(QMainWindow):
         button_layout = QHBoxLayout()
         btn_add = QPushButton("PIN 추가", self)
         btn_add.clicked.connect(self.add_pin)
+        btn_add.setToolTip("새로운 PIN을 추가합니다.")
         button_layout.addWidget(btn_add)
 
         btn_delete = QPushButton("PIN 삭제", self)
         btn_delete.clicked.connect(self.delete_pin)
+        btn_delete.setToolTip("선택한 PIN을 삭제합니다.")
         button_layout.addWidget(btn_delete)
 
         btn_use = QPushButton("PIN 자동 사용", self)
         btn_use.clicked.connect(self.use_pins)
+        btn_use.setToolTip("선택한 금액을 사용할 수 있는 PIN을 자동으로 사용합니다.")
         button_layout.addWidget(btn_use)
 
         btn_restore = QPushButton("PIN 복구", self)
         btn_restore.clicked.connect(self.restore_pins)
+        btn_restore.setToolTip("로그 파일로부터 PIN 목록을 복구합니다.")
         button_layout.addWidget(btn_restore)
 
         layout.addLayout(button_layout)
@@ -231,11 +281,28 @@ class PinManagerApp(QMainWindow):
         button_box.accepted.connect(about_dialog.accept)
         layout.addWidget(button_box)
         about_dialog.setLayout(layout)
-        about_dialog.exec_()
+        about_dialog.exec()
     
     def open_github_releases(self):
         # GitHub 릴리즈 페이지 열기
         webbrowser.open("https://github.com/TUVup/EggPinManager")
+    
+    # 자동 업데이트 설정 변경
+    def update_settings_change(self):
+        if config['SETTING']['auto_update'] == 'True':
+            config['SETTING']['auto_update'] = 'False'
+        else:
+            config['SETTING']['auto_update'] = 'True'
+        with open('config.ini', 'w', encoding='utf-8') as configfile:
+            config.write(configfile)
+    
+    def auto_submit_settings_change(self):
+        if config['SETTING']['auto_submit'] == 'True':
+            config['SETTING']['auto_submit'] = 'False'
+        else:
+            config['SETTING']['auto_submit'] = 'True'
+        with open('config.ini', 'w', encoding='utf-8') as configfile:
+            config.write(configfile)
 
     # GitHub에서 최신 릴리즈 정보를 확인하고 업데이트 여부를 묻는 기능
     def check_for_updates(self):
@@ -264,9 +331,11 @@ class PinManagerApp(QMainWindow):
     
     # PIN 목록을 로그 파일로부터 복구하는 함수
     def restore_pins(self):
-        result = self.manager.load_pins_from_log()
-        QMessageBox.information(self, "PIN 복구", result)
-        self.update_table()
+        reply = QMessageBox.question(self, "PIN 복구", "PIN 목록을 로그 파일로부터 복구하시겠습니까?", QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            result = self.manager.load_pins_from_log()
+            QMessageBox.information(self, "PIN 복구", result)
+            self.update_table()
 
     # 테이블 위젯에 컨텍스트 메뉴 추가
     def contextMenuEvent(self, event):
@@ -284,7 +353,7 @@ class PinManagerApp(QMainWindow):
         delete_action.triggered.connect(self.delete_selected_pin)
         context_menu.addAction(delete_action)
 
-        context_menu.exec_(self.mapToGlobal(event.pos()))
+        context_menu.exec(self.mapToGlobal(event.pos()))
 
     # 테이블에서 선택된 핀을 삭제하는 기능
     def delete_selected_pin(self):
@@ -293,7 +362,8 @@ class PinManagerApp(QMainWindow):
             cancel = QMessageBox.warning(self, "삭제 확인", "정말 삭제하시겠습니까?", QMessageBox.Yes | QMessageBox.No)
             if cancel == QMessageBox.Yes:
                 pin = selected_items[0].text()
-                self.manager.delete_pin(pin)
+                result = self.manager.delete_pin(pin)
+                QMessageBox.information(self, "결과", result)
                 self.update_table()
     
     # 테이블에서 선택된 핀의 잔액을 수정하는 기능
@@ -301,7 +371,7 @@ class PinManagerApp(QMainWindow):
         selected_items = self.table.selectedItems()
         if selected_items:
             pin = selected_items[0].text()
-            new_balance, ok = QInputDialog.getInt(self, "잔액 수정", "새 잔액 입력:", min=0)
+            new_balance, ok = QInputDialog.getInt(self, "잔액 수정", "새 잔액 입력:", 0)
             if not ok:
                 QMessageBox.warning(self, "취소", "잔액 수정이 취소되었습니다.")
                 return
@@ -309,7 +379,7 @@ class PinManagerApp(QMainWindow):
                 QMessageBox.warning(self, "오류", "잔액은 0보다 커야 합니다.")
                 return
             if ok:
-                self.manager.update_pin_balance(pin, new_balance)
+                result = self.manager.update_pin_balance(pin, new_balance)
                 QMessageBox.information(self, "성공", "잔액 수정이 완료되었습니다.")
                 self.update_table()
 
@@ -320,9 +390,21 @@ class PinManagerApp(QMainWindow):
         self.table.setRowCount(len(pins))
         for row, (pin, balance) in enumerate(pins):
             self.table.setItem(row, 0, QTableWidgetItem(pin))
-            self.table.item(row, 0).setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+            self.table.item(row, 0).setTextAlignment(Qt.AlignCenter)# | Qt.AlignVCenter
             self.table.setItem(row, 1, QTableWidgetItem(str(balance)))
-            self.table.item(row, 1).setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+            self.table.item(row, 1).setTextAlignment(Qt.AlignCenter)
+    
+    sort_flag = 0
+    
+    def sort_pins(self):
+        """잔액을 기준으로 PIN 목록을 정렬하는 함수"""
+        if self.sort_flag == 0:
+            self.manager.pins = dict(sorted(self.manager.pins.items(), key=lambda x: x[1]))
+            self.sort_flag = 1
+        else:
+            self.manager.pins = dict(sorted(self.manager.pins.items(), key=lambda x: x[1], reverse=True))
+            self.sort_flag = 0
+        self.update_table()
 
     # PIN 추가 다이얼로그
     def add_pin(self):
@@ -471,8 +553,6 @@ class PinManagerApp(QMainWindow):
             self.add_pin_input_box(len(pins_to_inject))
             time.sleep(0.2)
 
-
-
             # 5️⃣ 핀번호들 자바스크립트를 통해 입력
             self.inject_pin_codes(pins_to_inject)
 
@@ -480,7 +560,9 @@ class PinManagerApp(QMainWindow):
             self.click_all_agree()
 
             # 제출
-            self.submit()
+            if config['SETTING']['auto_submit'] == 'True':
+                self.submit()
+            # self.submit()
 
         except Exception as e:
             return "❌ 자동 입력에 실패했습니다."
@@ -519,7 +601,7 @@ class PinManagerApp(QMainWindow):
     # 핀을 입력할 박스를 추가하는 기능
     def add_pin_input_box(self, num):
         if num < 1:
-            return
+            return "사용되는 핀이 없습니다."
 
         # 5️⃣ 자바스크립트 코드 준비
         javascript_code = f'''
@@ -531,7 +613,7 @@ class PinManagerApp(QMainWindow):
     # javascript 코드를 붙여넣는 기능
     def inject_pin_codes(self, pins: list[str]):
         if pins is None or len(pins) == 0:
-            return
+            return "사용되는 핀이 없습니다."
 
         arr = [item for pin in pins for item in pin.split("-")]
         arr_text = f"['{"', '".join(arr)}']"
@@ -573,7 +655,8 @@ class PinManagerApp(QMainWindow):
 
 
 if __name__ == "__main__":
+    config_read()
     app = QApplication(sys.argv)
     ex = PinManagerApp()
     ex.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
