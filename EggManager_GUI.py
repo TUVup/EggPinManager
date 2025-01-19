@@ -20,7 +20,7 @@ from PySide6.QtCore import *
 from PySide6.QtGui import *
 import configparser as cp
 
-current_version = "v1.0.5"
+current_version = "v1.0.6"
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
@@ -54,6 +54,17 @@ class PinManager:
                 return json.load(file)
         except (FileNotFoundError, json.JSONDecodeError):
             return {}
+        
+    def show_log(self):
+        try:
+            with open(self.log_filename, "r") as log_file:
+                log = log_file.read()
+                log_file.close()
+                return log
+        except FileNotFoundError:
+            return "로그 파일을 찾을 수 없습니다."
+        except Exception as e:
+            return f"오류가 발생했습니다: {e}"
 
     def save_pins(self):
         with open(self.filename, "w") as file:
@@ -197,6 +208,11 @@ class PinManagerApp(QMainWindow):
         github_action.triggered.connect(self.open_github_releases)
         settings_menu.addAction(github_action)
 
+        # 로그 확인
+        show_log = QAction('로그 보기', self)
+        show_log.triggered.connect(self.show_log_file)
+        settings_menu.addAction(show_log)
+
         # 업데이트 액션 추가
         update_action = QAction('업데이트 확인', self)
         update_action.triggered.connect(self.check_for_updates)
@@ -286,6 +302,19 @@ class PinManagerApp(QMainWindow):
     def open_github_releases(self):
         # GitHub 릴리즈 페이지 열기
         webbrowser.open("https://github.com/TUVup/EggPinManager")
+    
+    def show_log_file(self):
+        log = self.manager.show_log()
+        about_dialog = QDialog(self)
+        about_dialog.setWindowTitle("로그")
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel(f"{log}"))
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok)
+        button_box.accepted.connect(about_dialog.accept)
+        layout.addWidget(button_box)
+        about_dialog.setLayout(layout)
+        about_dialog.exec()
+    
     
     # 자동 업데이트 설정 변경
     def update_settings_change(self):
@@ -446,7 +475,7 @@ class PinManagerApp(QMainWindow):
         selectbox.setWindowTitle("PIN 자동 사용")
         selectbox.setText("\n사용 방법을 선택하세요.\n")
         browser = QPushButton("브라우저")
-        ingame = QPushButton("게임(하오플레이이)")
+        ingame = QPushButton("게임(하오플레이)")
         cancel = QPushButton("취소")
         selectbox.addButton(browser, QMessageBox.AcceptRole)
         selectbox.addButton(ingame, QMessageBox.AcceptRole)
@@ -457,13 +486,13 @@ class PinManagerApp(QMainWindow):
         clicked_button = selectbox.clickedButton()
 
         if clicked_button == ingame:
-            amount, ok = QInputDialog.getInt(self, "PIN 자동 사용", "사용할 금액 입력:")
-            if ok and amount > 0:
-                result = self.use_pins_auto(amount)
+            ok = QMessageBox.question(self, "인게임 결제", "인게임 자동 결제를 사용하시겠습니까?")
+            if ok == QMessageBox.Yes:
+                result = self.use_pins_auto()
                 QMessageBox.information(self, "결과", result)
                 self.update_table()
         elif clicked_button == browser:
-            amount, ok = QInputDialog.getInt(self, "PIN 자동 사용", "사용할 금액 입력:")
+            amount, ok = QInputDialog.getInt(self, "PIN 자동 채우기", "사용할 금액 입력:")
             if ok and amount > 0:
                 result = self.use_pins_browser(amount)
                 QMessageBox.information(self, "결과", result)
@@ -475,8 +504,8 @@ class PinManagerApp(QMainWindow):
         selected_pins = self.manager.find_pins_for_amount(amount)
         if not selected_pins:
             return "충분한 잔액이 없습니다."
-        if len(selected_pins) > 5:
-            return f"{len(selected_pins)}개의 핀이 사용됩니다.\n핀은 최대 5개만 사용할 수 있습니다."
+        if len(selected_pins) == 0:
+            return "사용할 수 있는 핀 조합이 없습니다."
         
         QMessageBox.information(self, "준비", f"{amount}원을 사용하기 위해 {len(selected_pins)}개의 PIN을 사용합니다.")
         if len(selected_pins) > 1:
@@ -504,17 +533,10 @@ class PinManagerApp(QMainWindow):
         self.manager.save_pins()
         self.manager.save_pins_to_txt()
 
-        return "PIN 사용이 완료되었습니다."
+        return f"PIN {len(selected_pins)}개 {amount}원 사용이 완료되었습니다."
 
     # PIN 자동 사용 기능
-    def use_pins_auto(self, amount):
-        if amount > 250000:
-            return "한번에 최대 250,000원까지만 사용할 수 있습니다."
-        selected_pins = self.manager.find_pins_for_amount(amount)
-        if not selected_pins:
-            return "충분한 잔액이 없습니다."
-        if len(selected_pins) > 5:
-            return f"{len(selected_pins)}개의 핀이 사용됩니다.\n핀은 최대 5개만 사용할 수 있습니다."
+    def use_pins_auto(self):
         # 현재 클립보드 데이터 저장
         original_clipboard = pyperclip.paste()
         total_used = 0
@@ -542,9 +564,22 @@ class PinManagerApp(QMainWindow):
             time.sleep(1)
             pyautogui.hotkey('ctrl', '`') # Console 탭으로 이동
             time.sleep(0.2)
-            pyautogui.typewrite("allow pasting") # allow pasting 입력
-            pyautogui.press('enter') # allow pasting 입력
-            time.sleep(0.1)
+            # pyautogui.typewrite("allow pasting") # allow pasting 입력
+            # pyautogui.press('enter') # allow pasting 입력
+            # time.sleep(0.1)
+
+            amount = int(self.find_amount())
+            product_name = self.find_Product()
+            new_log_entry += f'{product_name} - {amount}원\n'
+
+            if amount > 250000:
+                return "한번에 최대 250,000원까지만 사용할 수 있습니다."
+
+            selected_pins = self.manager.find_pins_for_amount(amount)
+            if not selected_pins:
+                return "충분한 잔액이 없습니다."
+            if len(selected_pins) == 0:
+                return "사용할 수 있는 핀 조합이 없습니다."
 
             # 목록에서 최대 5개의 핀번호를 가져옴
             pins_to_inject = [selected_pins[i][0] for i in range(min(5, len(selected_pins)))]
@@ -565,7 +600,7 @@ class PinManagerApp(QMainWindow):
             # self.submit()
 
         except Exception as e:
-            return "❌ 자동 입력에 실패했습니다."
+            return f"❌ 자동 입력에 실패했습니다.\n{e}"
 
         finally:
             # 클립보드 데이터 원래 값으로 복원
@@ -591,12 +626,30 @@ class PinManagerApp(QMainWindow):
         self.manager.save_pins()
         self.manager.save_pins_to_txt()
 
-        return "PIN 사용이 완료되었습니다."
+        return f"{product_name}\nPIN {len(selected_pins)}개 {amount}원 사용이 완료되었습니다."
     
     # PIN 사용 로그를 파일에 기록하는 기능
     def log_pin_usage(self, new_log_entry):
         with open("pin_usage_log.txt", "w") as log_file:
             log_file.write(new_log_entry)
+
+    def find_amount(self):
+        javascript_code = '''copy(document.evaluate('//*[@id="header"]/div/dl[2]/dd/strong', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.innerText);'''
+        self.paste_javascript_code(javascript_code)
+        time.sleep(0.2)
+        amount = pyperclip.paste()
+        amount = amount.replace(" ", "")
+        amount = amount.replace(",", "")
+        # print(amount)
+        return amount
+    
+    def find_Product(self):
+        javascript_code = '''copy(document.evaluate('//*[@id="header"]/div/dl[1]/dd', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.innerText);
+'''
+        self.paste_javascript_code(javascript_code)
+        time.sleep(0.2)
+        name = pyperclip.paste()
+        return name
     
     # 핀을 입력할 박스를 추가하는 기능
     def add_pin_input_box(self, num):
