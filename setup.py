@@ -4,8 +4,7 @@ versions = '1.1.0-beta'
 build_exe_options = {
     "include_files": [
         'resources/',  # 리소스 폴더 전체
-        'LICENSE',
-        'README.md'
+        'LICENSE'
     ],
     "build_exe": f"EggPinManager_{versions}_cx"
 }
