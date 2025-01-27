@@ -4,7 +4,8 @@ versions = '1.1.0'
 build_exe_options = {
     "include_files": [
         'resources/',  # 리소스 폴더 전체
-        'LICENSE'
+        'LICENSE',
+        'README.md'
     ],
     "build_exe": f"EggManager_{versions}_cx"
 }
