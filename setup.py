@@ -1,5 +1,5 @@
 from cx_Freeze import setup, Executable
-versions = '1.1.0'
+versions = '1.1.0-beta'
 
 build_exe_options = {
     "include_files": [
@@ -7,13 +7,13 @@ build_exe_options = {
         'LICENSE',
         'README.md'
     ],
-    "build_exe": f"EggManager_{versions}_cx"
+    "build_exe": f"EggPinManager_{versions}_cx"
 }
  
 exe = [Executable(
     'main.py', 
     base='gui', 
-    target_name=f'EggManager_{versions}', 
+    target_name=f'EggPinManager_{versions}', 
     icon='resources/eggui.ico', 
     uac_admin=True
 )]
