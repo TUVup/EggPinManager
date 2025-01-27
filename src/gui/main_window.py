@@ -54,7 +54,7 @@ class PinManagerApp(QMainWindow):
         self.setup_auto_backup()
 
         # 업데이트 체크
-        if self.config.get_value("DEFAULT", "auto_update_check", "True").lower() == "true":
+        if self.config.get_value("DEFAULT", "auto_update_check") == "True":
             QTimer.singleShot(1000, check_for_updates_auto)
 
         # status_bar에 balance_label 추가
@@ -179,7 +179,11 @@ class PinManagerApp(QMainWindow):
 
     def setup_auto_backup(self):
         """자동 백업 타이머 설정"""
-        if self.config.auto_backup:
+        # 기존 타이머가 있으면 중지
+        if hasattr(self, 'backup_timer') and self.backup_timer.isActive():
+            self.backup_timer.stop()
+    
+        if self.config.auto_backup == "True":
             self.backup_timer = QTimer(self)
             self.backup_timer.timeout.connect(self.create_backup)
             interval = self.config.backup_interval * 60 * 1000  # 분 -> 밀리초
@@ -448,7 +452,7 @@ class PinManagerApp(QMainWindow):
 
                 # 동의 체크 및 제출
                 self._click_all_agree()
-                if self.config.get_value("SETTING", "payments", "True") == "True":
+                if self.config.get_value("DEFAULT", "payments") == "True":
                     self._submit()
 
                 # PIN 사용 로그 기록

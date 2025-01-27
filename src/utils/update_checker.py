@@ -84,7 +84,7 @@ def check_for_updates_auto(parent=None) -> Optional[str]:
     config = get_config()
     
     # 마지막 업데이트 확인 시간 검사
-    last_check = config.get_value('DEFAULT', 'last_update_check', '')
+    last_check = config.get_value('DEFAULT', 'last_update_check')
     if last_check:
         last_check_time = datetime.fromisoformat(last_check)
         if (datetime.now() - last_check_time).days < 1:

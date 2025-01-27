@@ -69,6 +69,8 @@ class ConfigManager:
         Returns:
             str: 설정값
         """
+        if not fallback:
+            fallback = self.config[section][key]
         return self.config.get(section, key, fallback=fallback)
 
     def set_value(self, section: str, key: str, value: str) -> None:
@@ -130,12 +132,12 @@ class ConfigManager:
     @property
     def auto_backup(self) -> bool:
         """자동 백업 설정"""
-        return self.get_value('DEFAULT', 'auto_backup') == 'True'
+        return self.get_value('DEFAULT', 'auto_backup')
 
     @property
     def backup_interval(self) -> int:
         """백업 주기(분)"""
-        return int(self.get_value('DEFAULT', 'backup_interval', '30'))
+        return int(self.get_value('DEFAULT', 'backup_interval'))
 
     @property
     def theme(self) -> str:

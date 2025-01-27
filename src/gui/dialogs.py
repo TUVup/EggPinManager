@@ -48,8 +48,7 @@ class SettingsDialog(QDialog):
         update_layout = QVBoxLayout(update_check_group)
         self.auto_update_check = QCheckBox("시작 시 자동으로 업데이트 확인")
         self.auto_update_check.setChecked(
-            self.config.get_value("DEFAULT", "auto_update_check", "True").lower()
-            == "true"
+            self.config.get_value("DEFAULT", "auto_update_check") == "True"
         )
         update_layout.addWidget(self.auto_update_check)
         general_layout.addWidget(update_check_group)
@@ -59,7 +58,7 @@ class SettingsDialog(QDialog):
         payments_layout = QVBoxLayout(payments_group)
         self.payments_check = QCheckBox("자동 결제 사용")
         self.payments_check.setChecked(
-            self.config.get_value("DEFAULT", "payments", "True").lower() == "true"
+            self.config.get_value("DEFAULT", "payments") == "True"
         )
         payments_layout.addWidget(self.payments_check)
         general_layout.addWidget(payments_group)
@@ -70,7 +69,7 @@ class SettingsDialog(QDialog):
 
         self.auto_backup_check = QCheckBox("자동 백업 사용")
         self.auto_backup_check.setChecked(
-            self.config.get_value("DEFAULT", "auto_backup", "True").lower() == "true"
+            self.config.get_value("DEFAULT", "auto_backup") == "True"
         )
 
 
@@ -79,7 +78,7 @@ class SettingsDialog(QDialog):
         self.backup_interval = QSpinBox()
         self.backup_interval.setRange(1, 1440)  # 1분 ~ 24시간
         self.backup_interval.setValue(
-            int(self.config.get_value("DEFAULT", "backup_interval", "30"))
+            int(self.config.get_value("DEFAULT", "backup_interval"))
         )
         interval_layout.addWidget(self.backup_interval)
         interval_layout.addWidget(QLabel("분"))
