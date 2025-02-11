@@ -17,6 +17,10 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QHeaderView,
     QInputDialog,
+    QRadioButton,
+    QFrame,
+    QButtonGroup,
+    QStyledItemDelegate
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
@@ -36,6 +40,13 @@ from .styles import Styles
 
 # Windows API 사용을 위한 설정
 user32 = windll.user32
+
+class NumberFormatDelegate(QStyledItemDelegate):
+    def displayText(self, value, locale):
+        if isinstance(value, (int, float)):
+            formatted_value = "{:,.0f}".format(value) if isinstance(value, float) else "{:,}".format(value)
+            return formatted_value
+        return super().displayText(value, locale)
 
 class PinManagerApp(QMainWindow):
     """PIN 관리자 메인 윈도우"""
@@ -89,15 +100,51 @@ class PinManagerApp(QMainWindow):
         
         self.balance_input = QLineEdit()
         self.balance_input.setPlaceholderText("잔액 입력")
+
+        self.drawer_toggle_button = QPushButton("금액 선택", self)
+        self.drawer_toggle_button.clicked.connect(self.toggle_drawer)
+
+        #라디오 박스 프레임 생성
+        self.drawer_widget = QFrame(self)
+        self.drawer_widget.setFrameShape(QFrame.StyledPanel)
+        drawer_layout = QVBoxLayout(self.drawer_widget)
+
+        #라디오 버튼 설정
+        self.credit_radio_btn1 = QRadioButton('1000')
+        self.credit_radio_btn2 = QRadioButton('3000')
+        self.credit_radio_btn3 = QRadioButton('5000')
+        self.credit_radio_btn4 = QRadioButton('10000')
+        self.credit_radio_btn5 = QRadioButton('30000')
+        self.credit_radio_btn6 = QRadioButton('50000')
+        self.radio_bg = QButtonGroup(self)
+        self.radio_bg.addButton(self.credit_radio_btn1)
+        self.radio_bg.addButton(self.credit_radio_btn2)
+        self.radio_bg.addButton(self.credit_radio_btn3)
+        self.radio_bg.addButton(self.credit_radio_btn4)
+        self.radio_bg.addButton(self.credit_radio_btn5)
+        self.radio_bg.addButton(self.credit_radio_btn6)
+        self.radio_bg.buttonClicked.connect(self.select_credit)
+
+        self.drawer_widget.setVisible(False)
         
         add_button = QPushButton("추가")
         add_button.clicked.connect(self.add_pin)
         
         auto_use_button = QPushButton("자동 사용")
         auto_use_button.clicked.connect(self._auto_use_pin)
-
+        
         input_layout.addWidget(self.pin_input)
         input_layout.addWidget(self.balance_input)
+        #금액 선택 라디오 박스
+        input_layout.addWidget(self.drawer_toggle_button)
+        drawer_layout.addWidget(self.credit_radio_btn1)
+        drawer_layout.addWidget(self.credit_radio_btn2)
+        drawer_layout.addWidget(self.credit_radio_btn3)
+        drawer_layout.addWidget(self.credit_radio_btn4)
+        drawer_layout.addWidget(self.credit_radio_btn5)
+        drawer_layout.addWidget(self.credit_radio_btn6)
+        input_layout.addWidget(self.drawer_widget)
+
         input_layout.addWidget(add_button)
         input_layout.addWidget(auto_use_button)
         
@@ -116,7 +163,7 @@ class PinManagerApp(QMainWindow):
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         
         # 정렬 기능 활성화
-        self.pin_table.setSortingEnabled(True)
+        # self.pin_table.setSortingEnabled(True)
         
         # 헤더 클릭 시 정렬 방향 변경 연결
         header.sectionClicked.connect(self._on_header_clicked)
@@ -176,6 +223,22 @@ class PinManagerApp(QMainWindow):
         width = int(self.config.get_value("DEFAULT", "window_width", "800"))
         height = int(self.config.get_value("DEFAULT", "window_height", "600"))
         self.resize(width, height)
+    
+    def toggle_drawer(self):
+        # 현재 서랍의 상태를 토글
+        is_visible = self.drawer_widget.isVisible()
+        self.drawer_widget.setVisible(not is_visible)
+        
+        # 버튼 텍스트도 상태에 따라 변경
+        # if not is_visible:
+        #     self.drawer_toggle_button.setText("금액 선택(열기)")
+        # else:
+        #     self.drawer_toggle_button.setText("금액 선택(닫기)")
+    
+    def select_credit(self, button):
+        """라디오 박스 금액 선택 적용"""
+        tmp = button.text()
+        self.balance_input.setText(tmp)
 
     def setup_auto_backup(self):
         """자동 백업 타이머 설정"""
@@ -197,7 +260,7 @@ class PinManagerApp(QMainWindow):
     def update_pin_list(self):
         """PIN 목록 테이블 업데이트"""
         # 정렬 기능 임시 비활성화
-        self.pin_table.setSortingEnabled(False)
+        # self.pin_table.setSortingEnabled(False)
         
         self.pin_table.setRowCount(0)
         for pin, balance in self.pin_manager.list_pins():
@@ -213,9 +276,11 @@ class PinManagerApp(QMainWindow):
             # 잔액 (숫자 정렬을 위해 데이터 역할 설정)
             balance_item = QTableWidgetItem()
             balance_item.setData(Qt.DisplayRole, balance)  # 정렬을 위한 데이터
+            balance_item.setData(Qt.EditRole, balance)
             balance_item.setData(Qt.TextAlignmentRole, Qt.AlignCenter)
             balance_item.setFlags(balance_item.flags() & ~Qt.ItemIsEditable)
-            balance_item.setText(f"{balance:,}")  # 표시용 텍스트
+            # balance_item.setText(f"{balance:,}")  # 표시용 텍스트
+            balance_item.setText(f"{balance}")
             self.pin_table.setItem(row, 1, balance_item)
 
             # 작업 버튼
@@ -236,7 +301,11 @@ class PinManagerApp(QMainWindow):
             self.pin_table.setCellWidget(row, 2, button_widget)
 
         # 정렬 기능 다시 활성화
-        self.pin_table.setSortingEnabled(True)
+        # self.pin_table.setSortingEnabled(True)
+
+        # 보기 편하게 잔액에 ,추가
+        delegate = NumberFormatDelegate(self.pin_table)
+        self.pin_table.setItemDelegateForColumn(1, delegate)
         
         # 전체 잔액 업데이트
         self.update_total_balance()
@@ -458,7 +527,7 @@ class PinManagerApp(QMainWindow):
                 # PIN 사용 로그 기록
                 self._log_pin_usage(product_name, amount, selected_pins)
 
-                self.status_bar.showMessage(f"{product_name} - PIN {len(selected_pins)}개 {amount}원 사용 완료", 5000)
+                self.status_bar.showMessage(f"{product_name} - PIN {len(selected_pins)}개 {amount}원 사용 완료", 10000)
 
             finally:
                 # 클립보드 복원
@@ -536,7 +605,7 @@ class PinManagerApp(QMainWindow):
             # 테이블 업데이트
             self.update_pin_list()
             
-            self.status_bar.showMessage(f"PIN {len(selected_pins)}개 {amount}원 사용이 완료되었습니다.", 5000)
+            self.status_bar.showMessage(f"PIN {len(selected_pins)}개 {amount}원 사용이 완료되었습니다.", 10000)
 
         except Exception as e:
             QMessageBox.warning(self, "자동 사용 오류", str(e))
@@ -605,6 +674,7 @@ class PinManagerApp(QMainWindow):
     def _log_pin_usage(self, product_name, amount, selected_pins):
         """PIN 사용 로그 기록"""
         log_entry = f'{product_name} - {amount}원\n'
+        logger.info(log_entry)
         total_used = 0
 
         for pin, balance in selected_pins:
@@ -631,11 +701,12 @@ class PinManagerApp(QMainWindow):
 
     def _on_header_clicked(self, logical_index):
         """헤더 클릭 시 정렬 처리"""
-        if logical_index == 2:  # '작업' 열은 정렬하지 않음
+        if logical_index == 2 or logical_index == 0:  # '작업' 열은 정렬하지 않음
             return
             
         # 현재 정렬 상태 확인
         order = self.pin_table.horizontalHeader().sortIndicatorOrder()
+        print(order)
         
         # 정렬 실행
         self.pin_table.sortItems(logical_index, order)
