@@ -15,7 +15,7 @@ from ..utils.logger import logger
 class BackupManager:
     """파일 백업 관리 클래스"""
     
-    def __init__(self, data_dir: str = 'data', backup_dir: str = 'backups'):
+    def __init__(self, data_dir: str = 'data', backup_dir: str = 'data/backups'):
         """
         BackupManager 초기화
         
@@ -28,10 +28,10 @@ class BackupManager:
         self.pins_file = self.data_dir / 'pins.json'
         
         # 디렉토리가 없으면 생성
-        if not self.backup_dir.exists():
-            self.backup_dir.mkdir(parents=True)
         if not self.data_dir.exists():
             self.data_dir.mkdir(parents=True)
+        if not self.backup_dir.exists():
+            self.backup_dir.mkdir(parents=True)
 
     def create_backup(self) -> str:
         """

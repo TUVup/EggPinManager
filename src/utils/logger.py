@@ -25,7 +25,7 @@ class Logger:
         self.logger.setLevel(logging.INFO)
 
         # 로그 디렉토리 생성
-        log_dir = Path('logs')
+        log_dir = Path('data/logs')
         log_dir.mkdir(exist_ok=True)
 
         # 파일 핸들러 설정

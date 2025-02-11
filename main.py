@@ -27,7 +27,7 @@ def setup_environment():
     필요한 디렉토리 생성 및 기본 설정 확인
     """
     # 필요한 디렉토리 생성
-    directories = ['data', 'logs']
+    directories = ['data']
     for directory in directories:
         path = Path(directory)
         path.mkdir(exist_ok=True)
