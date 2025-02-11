@@ -595,8 +595,10 @@ class PinManagerApp(QMainWindow):
                     total_used += balance
 
             # 로그 기록
-            with open("pin_usage_log.txt", "a", encoding='utf-8') as f:
+            with open("data/pin_usage_log.txt", "a", encoding='utf-8') as f:
                 f.write(new_log_entry)
+            
+            logger.info(f"브라우저 자동결제로 핀{len(selected_pins)}개 {amount}원 사용됨")
 
             # PIN 데이터 저장
             self.pin_manager.save_pins()
@@ -673,8 +675,8 @@ class PinManagerApp(QMainWindow):
 
     def _log_pin_usage(self, product_name, amount, selected_pins):
         """PIN 사용 로그 기록"""
-        log_entry = f'{product_name} - {amount}원\n'
-        logger.info(log_entry)
+        log_entry = f'HAOPLAY 자동사용으로 {product_name} - {amount}원 핀{len(selected_pins)}개 사용됨\n'
+        logger.info(f'HAOPLAY 자동사용으로 {product_name} - {amount}원 핀{len(selected_pins)}개 사용됨')
         total_used = 0
 
         for pin, balance in selected_pins:
@@ -692,7 +694,7 @@ class PinManagerApp(QMainWindow):
                 del self.pin_manager.pins[pin]
                 total_used += balance
 
-        with open("pin_usage_log.txt", "w", encoding='utf-8') as log_file:
+        with open("data/pin_usage_log.txt", "w", encoding='utf-8') as log_file:
             log_file.write(log_entry)
 
         self.pin_manager.save_pins()
@@ -706,7 +708,6 @@ class PinManagerApp(QMainWindow):
             
         # 현재 정렬 상태 확인
         order = self.pin_table.horizontalHeader().sortIndicatorOrder()
-        print(order)
         
         # 정렬 실행
         self.pin_table.sortItems(logical_index, order)

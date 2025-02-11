@@ -26,6 +26,9 @@ class Logger:
 
         # 로그 디렉토리 생성
         log_dir = Path('data/logs')
+        if not log_dir.exists():
+            data_dir = Path('data')
+            data_dir.mkdir(exist_ok=True)
         log_dir.mkdir(exist_ok=True)
 
         # 파일 핸들러 설정
@@ -56,7 +59,6 @@ class Logger:
     def debug(self, message: str) -> None:
         """디버그 로그 기록"""
         self.logger.debug(message)
-
 
 # 전역 로거 인스턴스
 logger = Logger()

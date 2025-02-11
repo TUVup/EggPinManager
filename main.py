@@ -47,7 +47,7 @@ def main():
         
         # 애플리케이션 초기화
         app = QApplication(sys.argv)
-        app.setApplicationName("PIN Manager")
+        app.setApplicationName("EggManager")
         app.setApplicationVersion(__version__)
         
         # 아이콘 설정

@@ -1,5 +1,5 @@
 from cx_Freeze import setup, Executable
-versions = '1.1.0-beta'
+versions = '1.1-beta.1'
 
 build_exe_options = {
     "include_files": [

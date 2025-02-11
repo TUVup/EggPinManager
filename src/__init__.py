@@ -7,7 +7,7 @@ from .config.config_manager import get_config
 from .models.pin_manager import PinManager
 from .utils.logger import logger
 
-__version__ = 'v1.1.0'
+__version__ = 'v1.0.7'
 __author__ = 'TUVup'
 
 # 주요 컴포넌트들을 패키지 레벨에서 직접 접근 가능하도록 설정
