@@ -9,18 +9,12 @@ from datetime import datetime
 import pyautogui
 import webbrowser
 import requests
-# from PyQt5.QtWidgets import *
-# # from PyQt5.QtWidgets import (
-# #     QApplication, QMainWindow, QVBoxLayout, QPushButton, QMessageBox, QInputDialog, QTableWidget, QTableWidgetItem, QLabel, QHBoxLayout, QHeaderView, QMenu, QAction, QDialog, QDialogButtonBox, QWidget, QCheckBox
-# # )
-# from PyQt5.QtCore import Qt
-# from PyQt5.QtGui import QIcon, QFont
 from PySide6.QtWidgets import *
 from PySide6.QtCore import *
 from PySide6.QtGui import *
 import configparser as cp
 
-current_version = "v1.0.6"
+current_version = "v1.0.7"
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
@@ -271,7 +265,7 @@ class PinManagerApp(QMainWindow):
         layout.addLayout(button_layout)
 
         bottom_layout = QHBoxLayout()
-        self.sum = QLabel(f"잔액 : {self.manager.get_total_balance()}", self)
+        self.sum = QLabel(f"잔액 : {'{0:,}'.format(self.manager.get_total_balance())}", self)
         bottom_layout.addWidget(self.sum)
 
         bottom_layout.addStretch(1)
@@ -298,6 +292,48 @@ class PinManagerApp(QMainWindow):
         layout.addWidget(button_box)
         about_dialog.setLayout(layout)
         about_dialog.exec()
+
+    # 금액 입력 다이얼로그
+    def amount_input_dialog(self, title="금액 입력"):
+        input_dialog = QDialog(self)
+        input_dialog.setWindowTitle(title)
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("금액을 입력하세요."))
+        amount_input = QSpinBox()
+        amount_input.setWrapping(True)
+        amount_input.setRange(0, 50000)
+        amount_input.setValue(0)
+        amount_input.selectAll()
+        amount_input.setSingleStep(1000)
+        layout.addWidget(amount_input)
+        amount_radio1 = QRadioButton("1000")
+        amount_radio2 = QRadioButton("3000")
+        amount_radio3 = QRadioButton("5000")
+        amount_radio4 = QRadioButton("10000")
+        amount_radio5 = QRadioButton("30000")
+        amount_radio6 = QRadioButton("50000")
+        amount_radio1.clicked.connect(lambda: amount_input.setValue(1000))
+        amount_radio2.clicked.connect(lambda: amount_input.setValue(3000))
+        amount_radio3.clicked.connect(lambda: amount_input.setValue(5000))
+        amount_radio4.clicked.connect(lambda: amount_input.setValue(10000))
+        amount_radio5.clicked.connect(lambda: amount_input.setValue(30000))
+        amount_radio6.clicked.connect(lambda: amount_input.setValue(50000))
+        radio_layout = QHBoxLayout()
+        radio_layout.addWidget(amount_radio1)
+        radio_layout.addWidget(amount_radio2)
+        radio_layout.addWidget(amount_radio3)
+        radio_layout.addWidget(amount_radio4)
+        radio_layout.addWidget(amount_radio5)
+        radio_layout.addWidget(amount_radio6)
+        layout.addLayout(radio_layout)
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(input_dialog.accept)
+        button_box.rejected.connect(input_dialog.reject)
+        layout.addWidget(button_box)
+        input_dialog.setLayout(layout)
+        if input_dialog.exec() == QDialog.Accepted:
+            return amount_input.value(), True
+        return None, False
     
     def open_github_releases(self):
         # GitHub 릴리즈 페이지 열기
@@ -400,11 +436,12 @@ class PinManagerApp(QMainWindow):
         selected_items = self.table.selectedItems()
         if selected_items:
             pin = selected_items[0].text()
-            new_balance, ok = QInputDialog.getInt(self, "잔액 수정", "새 잔액 입력:", 0)
+            # new_balance, ok = QInputDialog.getInt(self, "잔액 수정", "새 잔액 입력:", 0)
+            new_balance, ok = self.amount_input_dialog('잔액 수정')
             if not ok:
                 QMessageBox.warning(self, "취소", "잔액 수정이 취소되었습니다.")
                 return
-            if new_balance <= 0:
+            if ok and new_balance <= 0:
                 QMessageBox.warning(self, "오류", "잔액은 0보다 커야 합니다.")
                 return
             if ok:
@@ -414,13 +451,13 @@ class PinManagerApp(QMainWindow):
 
     # 테이블을 업데이트하는 기능
     def update_table(self):
-        self.sum.setText(f"잔액 : {self.manager.get_total_balance()}")
+        self.sum.setText(f"잔액 : {'{0:,}'.format(self.manager.get_total_balance())}")
         pins = self.manager.list_pins()
         self.table.setRowCount(len(pins))
         for row, (pin, balance) in enumerate(pins):
             self.table.setItem(row, 0, QTableWidgetItem(pin))
             self.table.item(row, 0).setTextAlignment(Qt.AlignCenter)# | Qt.AlignVCenter
-            self.table.setItem(row, 1, QTableWidgetItem(str(balance)))
+            self.table.setItem(row, 1, QTableWidgetItem('{0:,}'.format(balance)))
             self.table.item(row, 1).setTextAlignment(Qt.AlignCenter)
     
     sort_flag = 0
@@ -444,14 +481,14 @@ class PinManagerApp(QMainWindow):
         elif not self.manager.is_valid_pin_format(pin) and ok:
             QMessageBox.warning(self, "오류", "올바른 PIN 형식이 아닙니다.")
         elif ok and pin:
-            balance, ok = QInputDialog.getInt(self, "PIN 추가", "잔액 입력:")
+            balance, ok = self.amount_input_dialog()
             if ok and balance > 0:
                 result = self.manager.add_pin(pin, balance)
                 QMessageBox.information(self, "결과", result)
                 self.update_table()
-            elif balance <= 0:
+            elif ok and balance <= 0:
                 QMessageBox.warning(self, "금액 오류", "0보다 작은 금액은 입력할 수 없습니다.")
-            elif not balance:
+            elif ok and not balance:
                 QMessageBox.warning(self, "금액 오류", "금액은 반드시 입력해야 합니다.")
 
     # PIN 삭제 다이얼로그
@@ -475,7 +512,7 @@ class PinManagerApp(QMainWindow):
         selectbox.setWindowTitle("PIN 자동 사용")
         selectbox.setText("\n사용 방법을 선택하세요.\n")
         browser = QPushButton("브라우저")
-        ingame = QPushButton("게임(하오플레이)")
+        ingame = QPushButton("HAOPLAY")
         cancel = QPushButton("취소")
         selectbox.addButton(browser, QMessageBox.AcceptRole)
         selectbox.addButton(ingame, QMessageBox.AcceptRole)
@@ -492,7 +529,7 @@ class PinManagerApp(QMainWindow):
                 QMessageBox.information(self, "결과", result)
                 self.update_table()
         elif clicked_button == browser:
-            amount, ok = QInputDialog.getInt(self, "PIN 자동 채우기", "사용할 금액 입력:")
+            amount, ok = QInputDialog.getInt(self, "브라우저 PIN 자동 채우기", "사용할 금액 입력:")
             if ok and amount > 0:
                 result = self.use_pins_browser(amount)
                 QMessageBox.information(self, "결과", result)
@@ -564,9 +601,6 @@ class PinManagerApp(QMainWindow):
             time.sleep(1)
             pyautogui.hotkey('ctrl', '`') # Console 탭으로 이동
             time.sleep(0.2)
-            # pyautogui.typewrite("allow pasting") # allow pasting 입력
-            # pyautogui.press('enter') # allow pasting 입력
-            # time.sleep(0.1)
 
             amount = int(self.find_amount())
             product_name = self.find_Product()
