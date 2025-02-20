@@ -1,0 +1,197 @@
+/* 전체 위젯 기본 스타일 */
+QWidget {
+    background-color: #282A36; /* 드라큘라 배경색 */
+    color: #F8F8F2; /* 밝은 텍스트색 */
+    font-size: 10pt;
+}
+
+/* 메뉴바 스타일 */
+QMenuBar {
+    background-color: #282A36;
+    color: #F8F8F2;
+}
+
+QMenuBar::item {
+    background-color: #282A36;
+    color: #F8F8F2;
+    padding: 5px 10px;
+}
+
+QMenuBar::item:selected {
+    background-color: #44475A; /* 호버 시 색상 */
+    color: #F8F8F2;
+}
+
+/* 메뉴 스타일 */
+QMenu {
+    background-color: #282A36;
+    color: #F8F8F2;
+    border: 1px solid #6272A4;
+    border-radius: 3px;
+}
+
+/*QMenu::item {
+    padding: 5px 20px;
+}*/
+
+QMenu::item:selected {
+    background-color: #BD93F9; /* 선택 시 강조색 */
+    color: #282A36;
+}
+
+/* 버튼 스타일 */
+QPushButton {
+    background-color: #44475A; /* 버튼 배경색 */
+    color: #F8F8F2;
+    border: 1px solid #6272A4;
+    border-radius: 5px; /* 둥근 모서리 */
+    padding: 5px 10px;
+}
+
+QPushButton:hover {
+    background-color: #6272A4; /* 호버 시 색상 */
+}
+
+QPushButton:pressed {
+    background-color: #BD93F9; /* 클릭 시 강조색 */
+    color: #282A36;
+}
+
+/* 테이블 스타일 */
+QTableWidget {
+    background-color: #282A36;
+    color: #F8F8F2;
+    /*border: 1px solid #6272A4;
+    border-radius: 5px;*/
+    gridline-color: #44475A;
+    font-size: 11pt;
+}
+
+QHeaderView::section {
+    background-color: transparent; /* 헤더 배경색 제거 */
+    color: #F8F8F2;
+    /*padding: 5px;*/
+    border: 1px solid rgba(98, 115, 164, 0.6);
+    border-radius: 3px;
+    font-size: 11pt;
+}
+
+QTableWidget::item {
+    padding: 5px;
+}
+
+QTableWidget::item:selected {
+    background-color: #BD93F9;
+    color: #282A36;
+}
+
+QTableWidget::item:focus {
+    border: none;
+    outline: none;
+}
+
+/* 스크롤바 스타일 */
+QScrollBar:vertical {
+    background: #282A36;
+    width: 5px;
+    margin: 0px;
+}
+
+QScrollBar::handle:vertical {
+    background: #6272A4;
+    min-height: 20px;
+    border-radius: 5px;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    background: none;
+}
+
+QScrollBar:horizontal {
+    background: #282A36;
+    height: 10px;
+    margin: 0px;
+}
+
+QScrollBar::handle:horizontal {
+    background: #6272A4;
+    min-width: 20px;
+    border-radius: 5px;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    background: none;
+}
+
+/* 입력 필드 스타일 (QLineEdit, QSpinBox 등) */
+QLineEdit {
+    background-color: #44475A;
+    color: #F8F8F2;
+    border: 1px solid #6272A4;
+    border-radius: 3px;
+    padding: 3px;
+}
+
+QSpinBox {
+    background-color: #44475A;
+    color: #F8F8F2;
+    border: 1px solid #6272A4;
+    border-radius: 3px;
+    padding: 3px;
+    padding-right: 15px;
+}
+
+QLineEdit:focus, QSpinBox:focus {
+    border: 1px solid #BD93F9; /* 포커스 시 강조 */
+}
+
+/* 다이얼로그 및 메시지 박스 스타일 */
+QDialog {
+    background-color: #282A36;
+    color: #F8F8F2;
+}
+
+QMessageBox {
+    background-color: #282A36;
+    color: #F8F8F2;
+}
+
+QMessageBox QPushButton {
+    background-color: #44475A;
+    color: #F8F8F2;
+    border: 1px solid #6272A4;
+    border-radius: 5px;
+    padding: 5px 10px;
+}
+
+QMessageBox QPushButton:hover {
+    background-color: #6272A4;
+}
+
+QMessageBox QPushButton:pressed {
+    background-color: #BD93F9;
+    color: #282A36;
+}
+
+/* 라벨 스타일 */
+QLabel {
+    color: #F8F8F2;
+    font-size: 11pt;
+}
+
+/* 라디오 버튼 스타일 */
+QRadioButton {
+    color: #F8F8F2;
+}
+
+QRadioButton::indicator {
+    width: 13px;
+    height: 13px;
+    border: 1px solid #6272A4;
+    border-radius: 7px;
+}
+
+QRadioButton::indicator:checked {
+    background-color: #BD93F9;
+    border: 1px solid #BD93F9;
+}

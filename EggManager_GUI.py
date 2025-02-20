@@ -14,7 +14,7 @@ from PySide6.QtCore import *
 from PySide6.QtGui import *
 import configparser as cp
 
-current_version = "v1.0.7"
+current_version = "v1.0.9"
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
@@ -24,7 +24,7 @@ def config_read():
     if not config.read('config.ini'):
         # print("설정 파일을 찾을 수 없습니다. 새로운 설정 파일을 생성합니다.")
         config['DEFAULT'] = {'pin_file': 'pins.json', 'txt_file': 'pins.txt', 'log_file': 'pin_usage_log.txt'}
-        config['SETTING'] = {'auto_update': 'True', 'auto_submit': 'False'}
+        config['SETTING'] = {'auto_update': 'True', 'auto_submit': 'False', 'theme': 'Light'}
         with open('config.ini', 'w', encoding='utf-8') as configfile:
             config.write(configfile)
         config.read('config.ini')
@@ -176,6 +176,8 @@ class PinManagerApp(QMainWindow):
         if config['SETTING']['auto_update'] == 'True':
             # print("자동 업데이트가 활성화되어 있습니다.")
             self.auto_check_for_updates() # 프로그램 실행 시 업데이트 체크
+        self.current_theme = config['SETTING'].get('theme', 'Light')  # 기본값은 Dark
+        self.apply_theme(self.current_theme)
         self.initUI()
 
     def initUI(self):
@@ -214,16 +216,22 @@ class PinManagerApp(QMainWindow):
         settings_menu.addSeparator()
 
         # 자동 업데이트 확인 액션 추가
-        settings_update = QAction('실행시 자동 업데이트 확인', self, checkable=True)
+        settings_update = QAction('실행시 업데이트 확인', self, checkable=True)
         settings_update.setChecked(config['SETTING']['auto_update'] == 'True')
         settings_update.triggered.connect(self.update_settings_change)
         settings_menu.addAction(settings_update)
 
         # 자동 제출 확인 액션 추가 
-        settings_submit = QAction('결제창 자동 최종 결제', self, checkable=True)
+        settings_submit = QAction('자동 결제 활성화', self, checkable=True)
         settings_submit.setChecked(config['SETTING']['auto_submit'] == 'True')
         settings_submit.triggered.connect(self.auto_submit_settings_change)
         settings_menu.addAction(settings_submit)
+
+        # 테마 메뉴 추가
+        theme_menu = QMenu('테마', self)
+        theme_action = QAction('테마 선택', self)
+        theme_action.triggered.connect(self.show_theme_selector)
+        settings_menu.addAction(theme_action)
 
         # 중앙 위젯 설정
         central_widget = QWidget()
@@ -277,6 +285,51 @@ class PinManagerApp(QMainWindow):
         layout.addLayout(bottom_layout)
 
         self.update_table()
+
+        # 테마 선택을 위한 서랍형 패널
+        self.theme_dock = QDockWidget("테마 선택", self)
+        self.theme_dock.setAllowedAreas(Qt.RightDockWidgetArea)
+        self.theme_dock.setFeatures(QDockWidget.DockWidgetClosable)
+        self.theme_widget = QWidget()
+        self.theme_layout = QVBoxLayout(self.theme_widget)
+        
+        self.light_radio = QRadioButton("Light", self.theme_widget)
+        self.dark_radio = QRadioButton("Dark", self.theme_widget)
+        self.theme_layout.addWidget(self.light_radio)
+        self.theme_layout.addWidget(self.dark_radio)
+        self.theme_layout.addStretch()
+
+        self.light_radio.toggled.connect(lambda: self.apply_theme("Light"))
+        self.dark_radio.toggled.connect(lambda: self.apply_theme("Dark"))
+        
+        if self.current_theme == "Light":
+            self.light_radio.setChecked(True)
+        else:
+            self.dark_radio.setChecked(True)
+
+        self.theme_dock.setWidget(self.theme_widget)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.theme_dock)
+        self.theme_dock.hide()
+
+    def show_theme_selector(self):
+        self.theme_dock.show()
+
+    def apply_theme(self, theme):
+        try:
+            if theme == "Light":
+                light = resource_path('resource/dracula_light.qss')
+                with open(light, 'r') as f:
+                    self.setStyleSheet(f.read())
+            else:  # Dark
+                dark = resource_path('resource/dracula.qss')
+                with open(dark, 'r') as f:
+                    self.setStyleSheet(f.read())
+            self.current_theme = theme
+            config['SETTING']['theme'] = theme
+            with open('config.ini', 'w', encoding='utf-8') as configfile:
+                config.write(configfile)
+        except FileNotFoundError:
+            QMessageBox.critical(self, "Error", f"{theme} theme file not found.")
 
     # 프로그램 정보 다이얼로그
     def show_about_dialog(self):
@@ -422,20 +475,20 @@ class PinManagerApp(QMainWindow):
 
     # 테이블에서 선택된 핀을 삭제하는 기능
     def delete_selected_pin(self):
-        selected_items = self.table.selectedItems()
+        selected_items = self.table.currentItem()
         if selected_items:
             cancel = QMessageBox.warning(self, "삭제 확인", "정말 삭제하시겠습니까?", QMessageBox.Yes | QMessageBox.No)
             if cancel == QMessageBox.Yes:
-                pin = selected_items[0].text()
+                pin = self.table.item(selected_items.row(), 0).text()
                 result = self.manager.delete_pin(pin)
                 QMessageBox.information(self, "결과", result)
                 self.update_table()
     
     # 테이블에서 선택된 핀의 잔액을 수정하는 기능
     def edit_selected_pin_balance(self):
-        selected_items = self.table.selectedItems()
+        selected_items = self.table.currentItem()
         if selected_items:
-            pin = selected_items[0].text()
+            pin = self.table.item(selected_items.row(), 0).text()
             # new_balance, ok = QInputDialog.getInt(self, "잔액 수정", "새 잔액 입력:", 0)
             new_balance, ok = self.amount_input_dialog('잔액 수정')
             if not ok:
@@ -493,7 +546,15 @@ class PinManagerApp(QMainWindow):
 
     # PIN 삭제 다이얼로그
     def delete_pin(self):
-        pin, ok = QInputDialog.getText(self, "PIN 삭제", "삭제할 PIN 입력:")
+        # pin, ok = QInputDialog.getText(self, "PIN 삭제", "삭제할 PIN 입력:")
+        selected_items = self.table.currentItem()
+        if not selected_items:
+            QMessageBox.warning(self, "오류", "삭제할 PIN을 선택해 주세요.")
+            return
+        pin = self.table.item(selected_items.row(), 0).text()
+        ok = QMessageBox.question(self, "PIN 삭제", f"PIN: {pin}을 삭제하시겠습니까?", QMessageBox.Yes | QMessageBox.No)
+        if ok != QMessageBox.Yes:
+            return
         if ok and pin:
             if 0 == self.manager.pin_check(pin):
                 QMessageBox.warning(self, "PIN오류", "존재하지 않는 PIN입니다.")
@@ -529,7 +590,7 @@ class PinManagerApp(QMainWindow):
                 QMessageBox.information(self, "결과", result)
                 self.update_table()
         elif clicked_button == browser:
-            amount, ok = QInputDialog.getInt(self, "브라우저 PIN 자동 채우기", "사용할 금액 입력:")
+            amount, ok = QInputDialog.getInt(self, "브라우저 PIN 자동 채우기", "사용할 금액 입력:", step=1000)
             if ok and amount > 0:
                 result = self.use_pins_browser(amount)
                 QMessageBox.information(self, "결과", result)
@@ -550,7 +611,7 @@ class PinManagerApp(QMainWindow):
         QMessageBox.information(self, "준비", "첫번째 핀 입력창의 첫번째 칸을 클릭하고 PIN이 입력될 준비를 하세요.\n3초 후 시작합니다.")
         time.sleep(3)
         total_used = 0
-        new_log_entry = ""
+        new_log_entry = '브라우저 자동사용\n'
         for pin, balance in selected_pins:
             if total_used >= amount:
                 break
@@ -744,6 +805,12 @@ class PinManagerApp(QMainWindow):
 if __name__ == "__main__":
     config_read()
     app = QApplication(sys.argv)
+    # try:
+    #     with open('dracula_light.qss', 'r') as f:
+    #         app.setStyleSheet(f.read())
+    # except FileNotFoundError:
+    #     QMessageBox.critical(None, "Error", "Dracula theme file not found.")
+    #     sys.exit(1)
     ex = PinManagerApp()
     ex.show()
     sys.exit(app.exec())
