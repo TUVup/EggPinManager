@@ -14,7 +14,7 @@ from PySide6.QtCore import *
 from PySide6.QtGui import *
 import configparser as cp
 
-current_version = "v1.0.9"
+current_version = "v1.1.0"
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
@@ -186,7 +186,7 @@ class PinManagerApp(QMainWindow):
         # self.setWindowFlag(Qt.WindowStaysOnTopHint)
         # self.setGeometry(300, 300, 600, 400)
         self.setMinimumSize(600, 400)
-        ico = resource_path('eggui.ico')
+        ico = resource_path('resource/eggui.ico')
         self.setWindowIcon(QIcon(ico))
 
         # 메뉴 바 추가
@@ -318,11 +318,11 @@ class PinManagerApp(QMainWindow):
         try:
             if theme == "Light":
                 light = resource_path('resource/dracula_light.qss')
-                with open(light, 'r') as f:
+                with open(light, 'r', encoding='utf-8') as f:
                     self.setStyleSheet(f.read())
             else:  # Dark
                 dark = resource_path('resource/dracula.qss')
-                with open(dark, 'r') as f:
+                with open(dark, 'r', encoding='utf-8') as f:
                     self.setStyleSheet(f.read())
             self.current_theme = theme
             config['SETTING']['theme'] = theme
@@ -428,7 +428,7 @@ class PinManagerApp(QMainWindow):
             response = requests.get("https://api.github.com/repos/TUVup/EggPinManager/releases/latest")
             response.raise_for_status()
             latest_version = response.json()["tag_name"]
-            if latest_version > current_version:
+            if latest_version != current_version:
                 reply = QMessageBox.question(self, "업데이트 확인", f"새 버전 {latest_version}이(가) 있습니다. 업데이트 하시겠습니까?", QMessageBox.Yes | QMessageBox.No)
                 if reply == QMessageBox.Yes:
                     webbrowser.open("https://github.com/TUVup/EggPinManager/releases/latest")
@@ -442,7 +442,7 @@ class PinManagerApp(QMainWindow):
         response = requests.get("https://api.github.com/repos/TUVup/EggPinManager/releases/latest")
         response.raise_for_status()
         latest_version = response.json()["tag_name"]
-        if latest_version > current_version:
+        if latest_version != current_version:
             reply = QMessageBox.question(self, "업데이트 확인", f"새 버전 {latest_version}이(가) 있습니다. 업데이트 하시겠습니까?", QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
                 webbrowser.open("https://github.com/TUVup/EggPinManager/releases/latest")
@@ -805,12 +805,6 @@ class PinManagerApp(QMainWindow):
 if __name__ == "__main__":
     config_read()
     app = QApplication(sys.argv)
-    # try:
-    #     with open('dracula_light.qss', 'r') as f:
-    #         app.setStyleSheet(f.read())
-    # except FileNotFoundError:
-    #     QMessageBox.critical(None, "Error", "Dracula theme file not found.")
-    #     sys.exit(1)
     ex = PinManagerApp()
     ex.show()
     sys.exit(app.exec())
