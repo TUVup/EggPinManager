@@ -14,7 +14,7 @@ from PySide6.QtCore import *
 from PySide6.QtGui import *
 import configparser as cp
 
-current_version = "v1.1.0"
+current_version = "v1.1.1"
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
@@ -354,7 +354,7 @@ class PinManagerApp(QMainWindow):
         layout.addWidget(QLabel("금액을 입력하세요."))
         amount_input = QSpinBox()
         amount_input.setWrapping(True)
-        amount_input.setRange(0, 50000)
+        amount_input.setRange(0, 500000)
         amount_input.setValue(0)
         amount_input.selectAll()
         amount_input.setSingleStep(1000)
@@ -597,8 +597,6 @@ class PinManagerApp(QMainWindow):
                 self.update_table()
         
     def use_pins_browser(self, amount):
-        if amount > 250000:
-            return "한번에 최대 250,000원까지만 사용할 수 있습니다."
         selected_pins = self.manager.find_pins_for_amount(amount)
         if not selected_pins:
             return "충분한 잔액이 없습니다."
@@ -666,9 +664,6 @@ class PinManagerApp(QMainWindow):
             amount = int(self.find_amount())
             product_name = self.find_Product()
             new_log_entry += f'{product_name} - {amount}원\n'
-
-            if amount > 250000:
-                return "한번에 최대 250,000원까지만 사용할 수 있습니다."
 
             selected_pins = self.manager.find_pins_for_amount(amount)
             if not selected_pins:
