@@ -69,10 +69,10 @@
 
 종속성 설치
 - ```
-  pip install pyinstaller pyautogui pyqt5 pyperclip
+  pip install -r requirements.txt
   ```
 
 실행파일 빌드
 - ```
-  pyinstaller -w -F --uac=admin EggManager_GUI.py
+  pyinstaller -w -F --uac-admin -i="eggui.ico" --name=EggManager --add-data="resource;resource/" EggManager_GUI.py
   ```
