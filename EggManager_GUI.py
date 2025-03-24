@@ -14,7 +14,7 @@ from PySide6.QtCore import *
 from PySide6.QtGui import *
 import configparser as cp
 
-current_version = "v1.1.1"
+current_version = "v1.1.3"
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
@@ -30,17 +30,15 @@ def config_read():
         config.read('config.ini')
     return config
 
-def resource_path(relative_path):
-    """ Get absolute path to resource, works for dev and for PyInstaller """
-    base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base_path, relative_path)
-
 class PinManager:
     def __init__(self):
         self.filename = config["DEFAULT"]['pin_file']
         self.pins = self.load_pins()
+        self.locked_pins = set()  # 잠긴 핀 목록을 저장할 세트
         self.txt_filename = config["DEFAULT"]['txt_file']
         self.log_filename = config["DEFAULT"]['log_file']
+        self.locked_pins_file = os.path.join("resource", "locked_pins.json")  # 잠긴 핀 저장 파일
+        self.load_locked_pins()  # 잠긴 핀 정보 로드
 
     def load_pins(self):
         try:
@@ -95,6 +93,9 @@ class PinManager:
         return f"PIN {pin} 추가 완료. 잔액: {balance}"
     
     def format_pin(self, pin):
+        pattern = re.compile(r'^\d{4}-\d{4}-\d{4}-\d{4}-\d{4}$')
+        if bool(pattern.match(pin)):
+            pin = self.unformat_pin(pin)
         if len(pin) == 20 and pin.isdigit():
             return f"{pin[:5]}-{pin[5:10]}-{pin[10:15]}-{pin[15:]}"
         return pin
@@ -110,6 +111,9 @@ class PinManager:
         pin = self.format_pin(pin)
         if pin in self.pins:
             del self.pins[pin]
+            if pin in self.locked_pins:
+                self.locked_pins.remove(pin)
+                self.save_locked_pins()
             self.save_pins()
             self.save_pins_to_txt()
             return f"PIN {pin} 삭제 완료."
@@ -129,8 +133,21 @@ class PinManager:
     def list_pins(self):
         return list(self.pins.items())
 
-    def find_pins_for_amount(self, amount):
-        sorted_pins = sorted(self.pins.items(), key=lambda x: x[1])
+    def find_pins_for_amount(self, amount, select_pins = []):
+        # if select_pins:
+        #     sorted_pins = sorted(select_pins, key=lambda x: x[1])
+        # else:
+        #     sorted_pins = sorted(self.pins.items(), key=lambda x: x[1])
+        
+        if select_pins:
+            # 선택된 핀 중에서 잠기지 않은 핀만 필터링
+            filtered_pins = [(pin, balance) for pin, balance in select_pins if pin not in self.locked_pins]
+            sorted_pins = sorted(filtered_pins, key=lambda x: x[1])
+        else:
+            # 모든 핀 중에서 잠기지 않은 핀만 필터링
+            available_pins = [(pin, balance) for pin, balance in self.pins.items() if pin not in self.locked_pins]
+            sorted_pins = sorted(available_pins, key=lambda x: x[1])
+
         selected_pins = []
         total_selected = 0
         best_combination = []
@@ -169,6 +186,37 @@ class PinManager:
                 return 1
         return 0
     
+    def toggle_pin_lock(self, pin):
+        """핀의 잠금 상태를 토글합니다"""
+        if pin in self.locked_pins:
+            self.locked_pins.remove(pin)
+            self.save_locked_pins()
+            return False  # 잠금 해제됨
+        else:
+            self.locked_pins.add(pin)
+            self.save_locked_pins()
+            return True  # 잠김
+
+    def is_pin_locked(self, pin):
+        """핀이 잠겨있는지 확인합니다"""
+        return pin in self.locked_pins
+
+    def save_locked_pins(self):
+        """잠긴 핀 목록을 파일에 저장합니다"""
+        # resource 폴더가 없으면 생성
+        os.makedirs("resource", exist_ok=True)
+        
+        with open(self.locked_pins_file, "w") as file:
+            json.dump(list(self.locked_pins), file, indent=4)
+    
+    def load_locked_pins(self):
+        """잠긴 핀 목록을 파일에서 로드합니다"""
+        try:
+            with open(self.locked_pins_file, "r") as file:
+                self.locked_pins = set(json.load(file))
+        except (FileNotFoundError, json.JSONDecodeError):
+            self.locked_pins = set()
+    
 class PinManagerApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -176,9 +224,11 @@ class PinManagerApp(QMainWindow):
         if config['SETTING']['auto_update'] == 'True':
             # print("자동 업데이트가 활성화되어 있습니다.")
             self.auto_check_for_updates() # 프로그램 실행 시 업데이트 체크
-        self.current_theme = config['SETTING'].get('theme', 'Light')  # 기본값은 Dark
+        self.current_theme = config['SETTING'].get('theme', 'Light')  # 기본값은 Light
         self.apply_theme(self.current_theme)
         self.initUI()
+        # 메뉴바 이벤트 필터 설치
+        self.menuBar().installEventFilter(self)
 
     def initUI(self):
         # UI 초기화 및 설정
@@ -186,7 +236,7 @@ class PinManagerApp(QMainWindow):
         # self.setWindowFlag(Qt.WindowStaysOnTopHint)
         # self.setGeometry(300, 300, 600, 400)
         self.setMinimumSize(600, 400)
-        ico = resource_path('resource/eggui.ico')
+        ico = 'resource/eggui.ico'
         self.setWindowIcon(QIcon(ico))
 
         # 메뉴 바 추가
@@ -240,10 +290,16 @@ class PinManagerApp(QMainWindow):
 
         # PIN 목록 테이블
         self.table = QTableWidget()
-        self.table.setColumnCount(2)
-        self.table.setHorizontalHeaderLabels(["PIN 번호", "잔액"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["PIN 번호", "잔액", "잠금"])
+        self.table.verticalHeader().setVisible(False)
+        # 각 컬럼의 크기 정책 개별 설정
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)  # PIN 번호 컬럼 - 늘어남
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)  # 잔액 컬럼 - 늘어남
+        self.table.resizeColumnsToContents()
+        # 여기서 SingleSelection을 ExtendedSelection으로 변경
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)  # 행 단위 선택
         self.table.horizontalHeader().sectionClicked.connect(self.sort_pins)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         layout.addWidget(self.table)
@@ -256,8 +312,8 @@ class PinManagerApp(QMainWindow):
         button_layout.addWidget(btn_add)
 
         btn_delete = QPushButton("PIN 삭제", self)
-        btn_delete.clicked.connect(self.delete_pin)
-        btn_delete.setToolTip("선택한 PIN을 삭제합니다.")
+        btn_delete.clicked.connect(self.delete_multiple_pins)  
+        btn_delete.setToolTip("선택한 PIN을 모두 삭제합니다.")
         button_layout.addWidget(btn_delete)
 
         btn_use = QPushButton("PIN 자동 사용", self)
@@ -317,11 +373,11 @@ class PinManagerApp(QMainWindow):
     def apply_theme(self, theme):
         try:
             if theme == "Light":
-                light = resource_path('resource/dracula_light.qss')
+                light = 'resource/dracula_light.qss'
                 with open(light, 'r', encoding='utf-8') as f:
                     self.setStyleSheet(f.read())
             else:  # Dark
-                dark = resource_path('resource/dracula.qss')
+                dark = 'resource/dracula.qss'
                 with open(dark, 'r', encoding='utf-8') as f:
                     self.setStyleSheet(f.read())
             self.current_theme = theme
@@ -387,6 +443,28 @@ class PinManagerApp(QMainWindow):
         if input_dialog.exec() == QDialog.Accepted:
             return amount_input.value(), True
         return None, False
+    
+    def mousePressEvent(self, event):
+        # 테이블 위치와 크기 정보 가져오기
+        table_rect = self.table.geometry()
+        
+        # 클릭한 위치가 테이블 영역 내부인지 확인
+        # pos() 대신 position().toPoint() 사용
+        if not table_rect.contains(event.position().toPoint()):
+            # 테이블 외부를 클릭한 경우 선택 해제
+            self.table.clearSelection()
+        
+        # 부모 클래스의 이벤트 처리 메서드 호출
+        super().mousePressEvent(event)
+    
+    def eventFilter(self, obj, event):
+        # 메뉴바에 대한 마우스 버튼 누름 이벤트 처리
+        if obj == self.menuBar() and event.type() == QEvent.MouseButtonPress:
+            # 테이블 선택 해제
+            self.table.clearSelection()
+            
+        # 이벤트를 기본 핸들러로 전달
+        return super().eventFilter(obj, event)
     
     def open_github_releases(self):
         # GitHub 릴리즈 페이지 열기
@@ -467,11 +545,35 @@ class PinManagerApp(QMainWindow):
         edit_balance_action.triggered.connect(self.edit_selected_pin_balance)
         context_menu.addAction(edit_balance_action)
 
+        # 잠금/해제 메뉴 추가
+        lock_action = QAction("PIN 잠금/해제", self)
+        lock_action.triggered.connect(self.toggle_selected_pin_lock)
+        context_menu.addAction(lock_action)
+
         delete_action = QAction("PIN 삭제", self)
         delete_action.triggered.connect(self.delete_selected_pin)
         context_menu.addAction(delete_action)
 
+        multiple_delete_action = QAction("여러 PIN 삭제", self)
+        multiple_delete_action.triggered.connect(self.delete_multiple_pins)
+        context_menu.addAction(multiple_delete_action)
+
         context_menu.exec(self.mapToGlobal(event.pos()))
+
+    def toggle_selected_pin_lock(self):
+        """선택된 핀의 잠금 상태를 토글합니다"""
+        selected_items = self.table.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "오류", "잠금/해제할 PIN을 선택해 주세요.")
+            return
+            
+        selected_rows = set([item.row() for item in selected_items])
+        for row in selected_rows:
+            pin = self.table.item(row, 0).text()
+            self.manager.toggle_pin_lock(pin)
+            
+        QMessageBox.information(self, "완료", f"{len(selected_rows)}개의 PIN 잠금 상태가 변경되었습니다.")
+        self.update_table()
 
     # 테이블에서 선택된 핀을 삭제하는 기능
     def delete_selected_pin(self):
@@ -483,6 +585,49 @@ class PinManagerApp(QMainWindow):
                 result = self.manager.delete_pin(pin)
                 QMessageBox.information(self, "결과", result)
                 self.update_table()
+    
+    # 여러 PIN을 동시에 삭제하는 기능
+    def delete_multiple_pins(self):
+        # 선택된 행 가져오기
+        selected_rows = set([item.row() for item in self.table.selectedItems()])
+        
+        if not selected_rows:
+            QMessageBox.warning(self, "오류", "삭제할 PIN을 선택해 주세요.")
+            return
+        
+        # 선택된 PIN 목록 생성
+        selected_pins = []
+        for row in selected_rows:
+            pin = self.table.item(row, 0).text()
+            selected_pins.append(pin)
+        
+        # 사용자에게 삭제 확인 메시지 표시
+        message = f"선택한 {len(selected_pins)}개의 PIN을 삭제하시겠습니까?\n\n"
+        if len(selected_pins) <= 5:  # 5개 이하면 목록 표시
+            message += "PIN 목록:\n" + "\n".join(selected_pins)
+        else:  # 5개 초과면 일부만 표시
+            message += "PIN 목록 (일부):\n" + "\n".join(selected_pins[:5]) + f"\n... 외 {len(selected_pins)-5}개"
+        
+        ok = QMessageBox.question(self, "PIN 삭제", message, QMessageBox.Yes | QMessageBox.No)
+        
+        if ok != QMessageBox.Yes:
+            return
+        
+        # 최종 확인
+        final_ok = QMessageBox.warning(self, "삭제 확인", "정말 삭제하시겠습니까?", QMessageBox.Yes | QMessageBox.No)
+        if final_ok != QMessageBox.Yes:
+            return
+        
+        # PIN 삭제 진행
+        deleted_count = 0
+        for pin in selected_pins:
+            if self.manager.pin_check(pin) == 1:
+                self.manager.delete_pin(pin)
+                deleted_count += 1
+        
+        # 결과 메시지 표시
+        QMessageBox.information(self, "결과", f"{deleted_count}개의 PIN이 삭제되었습니다.")
+        self.update_table()
     
     # 테이블에서 선택된 핀의 잔액을 수정하는 기능
     def edit_selected_pin_balance(self):
@@ -502,16 +647,69 @@ class PinManagerApp(QMainWindow):
                 QMessageBox.information(self, "성공", "잔액 수정이 완료되었습니다.")
                 self.update_table()
 
-    # 테이블을 업데이트하는 기능
     def update_table(self):
         self.sum.setText(f"잔액 : {'{0:,}'.format(self.manager.get_total_balance())}")
         pins = self.manager.list_pins()
         self.table.setRowCount(len(pins))
         for row, (pin, balance) in enumerate(pins):
+            # PIN 번호 열
             self.table.setItem(row, 0, QTableWidgetItem(pin))
-            self.table.item(row, 0).setTextAlignment(Qt.AlignCenter)# | Qt.AlignVCenter
+            self.table.item(row, 0).setTextAlignment(Qt.AlignCenter)
+            
+            # 잔액 열
             self.table.setItem(row, 1, QTableWidgetItem('{0:,}'.format(balance)))
             self.table.item(row, 1).setTextAlignment(Qt.AlignCenter)
+            
+            # 잠금 상태 열 - 체크박스 위젯 사용
+            checkbox = QCheckBox()
+            checkbox.setChecked(self.manager.is_pin_locked(pin))
+            checkbox.stateChanged.connect(lambda state, p=pin: self.toggle_pin_lock(p, state))
+
+            # 체크박스 레이아웃 최적화
+            checkbox_widget = QWidget()
+            checkbox_layout = QHBoxLayout(checkbox_widget)
+            checkbox_layout.addWidget(checkbox)
+            checkbox_layout.setAlignment(Qt.AlignCenter)
+            checkbox_layout.setContentsMargins(0, 0, 0, 0)
+            checkbox_widget.setLayout(checkbox_layout)
+            checkbox_widget.setStyleSheet("background-color: transparent;")
+
+            self.table.setCellWidget(row, 2, checkbox_widget)
+
+            # 잠긴 핀에 시각적 표시 추가 (회색 배경과 이탤릭체)
+            if self.manager.is_pin_locked(pin):
+                # for col in range(2):  # 첫 두 열만 스타일 적용 (체크박스 제외)
+                item = self.table.item(row, 0)
+                item2 = self.table.item(row, 1)
+                font = item.font()
+                font2 = item2.font()
+                font.setItalic(True)
+                font2.setItalic(True)
+                font.setStrikeOut(True)
+                font2.setStrikeOut(True)
+                item.setFont(font)
+                item2.setFont(font2)
+                # item.setForeground(QColor(128, 128, 128))  # 회색 텍스트
+                # item.setBackground(QColor(240, 240, 240))  # 연한 회색 배경
+            else:
+                # 잠긴 핀이 아닌 경우 스타일 초기화
+                item = self.table.item(row, 0)
+                item2 = self.table.item(row, 1)
+                font = item.font()
+                font2 = item2.font()
+                font.setItalic(False)
+                font2.setItalic(False)
+                font.setStrikeOut(False)
+                font2.setStrikeOut(False)
+                item.setFont(font)
+                item2.setFont(font2)
+
+        # PinManagerApp 클래스에 추가
+    def toggle_pin_lock(self, pin, state):
+        """핀의 잠금 상태를 토글합니다"""
+        self.manager.toggle_pin_lock(pin)
+
+        self.update_table()
     
     sort_flag = 0
     
@@ -571,7 +769,44 @@ class PinManagerApp(QMainWindow):
         selectbox = QMessageBox(self)
         selectbox.setIcon(QMessageBox.Question)
         selectbox.setWindowTitle("PIN 자동 사용")
-        selectbox.setText("\n사용 방법을 선택하세요.\n")
+        
+        # 선택된 행이 있는지 확인
+        selected_rows = set([item.row() for item in self.table.selectedItems()])
+        
+        if selected_rows:
+            selectbox.setWindowTitle("선택된 PIN 자동 사용")
+            pin_num = []
+            locked_pin_count = 0
+            
+            # 선택된 핀 중 잠기지 않은 핀만 필터링
+            filtered_rows = []
+            for row in selected_rows:
+                pin = self.table.item(row, 0).text()
+                if not self.manager.is_pin_locked(pin):
+                    pin_num.append(pin)
+                    filtered_rows.append(row)
+                else:
+                    locked_pin_count += 1
+            
+            # 선택된 핀이 모두 잠겨 있는 경우
+            if not pin_num:
+                QMessageBox.warning(self, "오류", "선택된 PIN이 모두 잠겨 있습니다.")
+                return
+            message = ""
+            # 일부 핀이 잠겨 있는 경우 알림
+            if locked_pin_count > 0:
+                message += f"선택된 PIN 중 {locked_pin_count}개는 잠겨 있어 사용되지 않습니다.\n"
+            if len(pin_num) <= 5:  # 5개 이하면 목록 표시
+                message += "사용될 PIN 목록:\n" + "\n".join(pin_num)
+            else:  # 5개 초과면 일부만 표시
+                message += "사용될 PIN 목록 (일부):\n" + "\n".join(pin_num[:5]) + f"\n... 외 {len(pin_num)-5}개"
+            selectbox.setText("\n사용 방법을 선택하세요.\n" + message + "\n사용될 총 금액: " + str('{0:,}'.format(sum(int(self.table.item(row, 1).text().replace(',', '')) for row in filtered_rows))) + "원")
+            # PIN이 선택되었을 때 "선택된 PIN 사용" 버튼 추가
+            # selected_pins = QPushButton("선택된 PIN 사용")
+            # selectbox.addButton(selected_pins, QMessageBox.AcceptRole)
+        else:
+            selectbox.setText("\n사용 방법을 선택하세요.\n")
+            
         browser = QPushButton("브라우저")
         ingame = QPushButton("HAOPLAY")
         cancel = QPushButton("취소")
@@ -583,7 +818,24 @@ class PinManagerApp(QMainWindow):
         
         clicked_button = selectbox.clickedButton()
 
-        if clicked_button == ingame:
+        if selected_rows:
+            selected_pins_data = []
+            for row in filtered_rows:
+                pin = self.table.item(row, 0).text()
+                balance = int(self.table.item(row, 1).text().replace(',', ''))
+                selected_pins_data.append((pin, balance))
+
+            if clicked_button == browser:
+                # 브라우저 사용
+                result = self.use_selected_pins_browser(selected_pins_data)
+                QMessageBox.information(self, "결과", result)
+                self.update_table()
+            elif clicked_button == ingame:
+                # HAOPLAY 사용
+                result = self.use_selected_pins_auto(selected_pins_data)
+                QMessageBox.information(self, "결과", result)
+                self.update_table()
+        elif clicked_button == ingame:
             ok = QMessageBox.question(self, "인게임 결제", "인게임 자동 결제를 사용하시겠습니까?")
             if ok == QMessageBox.Yes:
                 result = self.use_pins_auto()
@@ -595,21 +847,37 @@ class PinManagerApp(QMainWindow):
                 result = self.use_pins_browser(amount)
                 QMessageBox.information(self, "결과", result)
                 self.update_table()
-        
-    def use_pins_browser(self, amount):
-        selected_pins = self.manager.find_pins_for_amount(amount)
+
+    # 선택된 PIN을 브라우저에서 사용
+    def use_selected_pins_browser(self, selected_pins):
         if not selected_pins:
-            return "충분한 잔액이 없습니다."
-        if len(selected_pins) == 0:
-            return "사용할 수 있는 핀 조합이 없습니다."
+            return "선택된 PIN이 없습니다."
+        
+        total_balance = sum(balance for _, balance in selected_pins)
+
+        amount, ok = QInputDialog.getInt(self, "브라우저 PIN 자동 채우기", 
+                          f"사용할 금액 입력 (최대 {total_balance}원):", 
+                          0, 1, total_balance, 1000)
+        
+        selected_pins = self.manager.find_pins_for_amount(amount, selected_pins)
+        
+        if not ok:
+            return "취소되었습니다."
+        
+        if amount <= 0:
+            return "올바른 금액을 입력하세요."
+        
+        if amount > total_balance:
+            return "선택된 PIN의 총 잔액보다 큰 금액을 사용할 수 없습니다."
         
         QMessageBox.information(self, "준비", f"{amount}원을 사용하기 위해 {len(selected_pins)}개의 PIN을 사용합니다.")
         if len(selected_pins) > 1:
             QMessageBox.information(self, "준비", f"핀 입력창을 {len(selected_pins)-1}개 추가해 주세요.")
         QMessageBox.information(self, "준비", "첫번째 핀 입력창의 첫번째 칸을 클릭하고 PIN이 입력될 준비를 하세요.\n3초 후 시작합니다.")
         time.sleep(3)
+        
         total_used = 0
-        new_log_entry = '브라우저 자동사용\n'
+        new_log_entry = '브라우저 자동사용(선택된 PIN)\n'
         for pin, balance in selected_pins:
             if total_used >= amount:
                 break
@@ -628,8 +896,97 @@ class PinManagerApp(QMainWindow):
         self.log_pin_usage(new_log_entry)
         self.manager.save_pins()
         self.manager.save_pins_to_txt()
+        self.table.clearSelection()
 
-        return f"PIN {len(selected_pins)}개 {amount}원 사용이 완료되었습니다."
+        return f"선택된 PIN {len(selected_pins)}개로 {amount}원 사용이 완료되었습니다."
+
+    # 선택된 PIN을 HAOPLAY에서 사용
+    def use_selected_pins_auto(self, selected_pins):
+        # 현재 클립보드 데이터 저장
+        original_clipboard = pyperclip.paste()
+        total_used = 0
+        new_log_entry = ""
+        
+        try:
+            # 1️⃣ HAOPLAY 창 핸들 찾기
+            haoplay_hwnd = user32.FindWindowW(None, "HAOPLAY")
+            if not haoplay_hwnd:
+                return "❌ HAOPLAY 창을 찾을 수 없습니다."
+
+            # 2️⃣ "Chrome_WidgetWin_0" 컨트롤 핸들 찾기 (웹뷰 컨트롤)
+            webview_hwnd = user32.FindWindowExW(haoplay_hwnd, 0, "Chrome_WidgetWin_0", None)
+            if not webview_hwnd:
+                return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
+
+            # 3️⃣ 창 활성화 (child_hWnd로 변경)
+            user32.SetForegroundWindow(webview_hwnd)  # 웹뷰 컨트롤을 최상위로 활성화
+            time.sleep(0.5)  # 안정성을 위해 대기
+            
+            pyautogui.hotkey('ctrl', 'shift', 'j')  # DevTools 열기
+            time.sleep(1)
+            pyautogui.hotkey('ctrl', '`') # Console 탭으로 이동
+            time.sleep(0.2)
+
+            amount = int(self.find_amount())
+            product_name = self.find_Product()
+            new_log_entry += f'{product_name} - {amount}원\n'
+
+            # 선택된 PIN의 총 잔액 확인
+            total_balance = sum(balance for _, balance in selected_pins)
+            if total_balance < amount:
+                return f"선택된 PIN의 총 잔액({total_balance}원)이 필요한 금액({amount}원)보다 적습니다."
+
+            # 목록에서 최대 5개의 핀번호 제한
+            pins_to_use = self.manager.find_pins_for_amount(amount, selected_pins)
+            if not pins_to_use:
+                return "충분한 잔액이 없습니다."
+            if len(pins_to_use) == 0:
+                return "사용할 수 있는 핀 조합이 없습니다."
+            
+            pins_to_inject = [pin for pin, _ in pins_to_use]
+
+            # 4️⃣ 핀번호를 입력박스에 추가
+            self.add_pin_input_box(len(pins_to_inject))
+            time.sleep(0.2)
+
+            # 5️⃣ 핀번호들 자바스크립트를 통해 입력
+            self.inject_pin_codes(pins_to_inject)
+
+            # 모두 동의
+            self.click_all_agree()
+
+            # 제출
+            if config['SETTING']['auto_submit'] == 'True':
+                self.submit()
+
+        except Exception as e:
+            return f"❌ 자동 입력에 실패했습니다.\n{e}"
+
+        finally:
+            # 클립보드 데이터 원래 값으로 복원
+            pyperclip.copy(original_clipboard)
+
+        # 사용한 핀의 잔액을 갱신하고 필요 시 PIN 삭제
+        for pin, balance in pins_to_use:
+            if total_used >= amount:
+                break
+            used_amount = min(balance, amount - total_used)
+            remaining_balance = balance - used_amount
+            # 사용한 PIN 정보를 로그에 기록
+            new_log_entry += f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} : {pin} [원금: {balance}] [사용된 금액: {used_amount}] [남은 잔액: {remaining_balance}]\n"
+            if remaining_balance > 0:
+                self.manager.pins[pin] = remaining_balance
+                total_used = amount
+            else:
+                del self.manager.pins[pin]
+                total_used += balance
+
+        self.log_pin_usage(new_log_entry)
+        self.manager.save_pins()
+        self.manager.save_pins_to_txt()
+        self.table.clearSelection()
+
+        return f"{product_name}\n선택된 PIN {len(pins_to_use)}개로 {amount}원 사용이 완료되었습니다."
 
     # PIN 자동 사용 기능
     def use_pins_auto(self):
@@ -717,6 +1074,41 @@ class PinManagerApp(QMainWindow):
         self.manager.save_pins_to_txt()
 
         return f"{product_name}\nPIN {len(selected_pins)}개 {amount}원 사용이 완료되었습니다."
+    
+    def use_pins_browser(self, amount):
+        selected_pins = self.manager.find_pins_for_amount(amount)
+        if not selected_pins:
+            return "충분한 잔액이 없습니다."
+        if len(selected_pins) == 0:
+            return "사용할 수 있는 핀 조합이 없습니다."
+        
+        QMessageBox.information(self, "준비", f"{amount}원을 사용하기 위해 {len(selected_pins)}개의 PIN을 사용합니다.")
+        if len(selected_pins) > 1:
+            QMessageBox.information(self, "준비", f"핀 입력창을 {len(selected_pins)-1}개 추가해 주세요.")
+        QMessageBox.information(self, "준비", "첫번째 핀 입력창의 첫번째 칸을 클릭하고 PIN이 입력될 준비를 하세요.\n3초 후 시작합니다.")
+        time.sleep(3)
+        total_used = 0
+        new_log_entry = '브라우저 자동사용\n'
+        for pin, balance in selected_pins:
+            if total_used >= amount:
+                break
+            pyautogui.write(pin.replace("-", ""))  # PIN 입력
+            used_amount = min(balance, amount - total_used)
+            remaining_balance = balance - used_amount
+            # 사용한 PIN 정보를 로그에 기록
+            new_log_entry += f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} : {pin} [원금: {balance}] [사용된 금액: {used_amount}] [남은 잔액: {remaining_balance}]\n"
+            if remaining_balance > 0:
+                self.manager.pins[pin] = remaining_balance
+                total_used = amount
+            else:
+                del self.manager.pins[pin]
+                total_used += balance
+
+        self.log_pin_usage(new_log_entry)
+        self.manager.save_pins()
+        self.manager.save_pins_to_txt()
+
+        return f"PIN {len(selected_pins)}개 {amount}원 사용이 완료되었습니다."
     
     # PIN 사용 로그를 파일에 기록하는 기능
     def log_pin_usage(self, new_log_entry):
