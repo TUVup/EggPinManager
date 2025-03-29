@@ -124,20 +124,20 @@ class AutoUpdater:
             latest_version = latest_release["tag_name"]
             release_notes = latest_release.get("body", "업데이트 내용이 제공되지 않았습니다.")
 
-            # skip_version = config['UPDATE'].get('skip_version', '')
+            skip_version = config['UPDATE'].get('skip_version', '')
 
             # 건너뛸 버전과 동일한 경우 업데이트 알림 표시하지 않음
-            # if latest_version == skip_version:
-            #     if not silent:
-            #         QMetaObject.invokeMethod(
-            #             self.parent,
-            #             "show_info_message",
-            #             Qt.QueuedConnection,
-            #             Q_ARG(str, "업데이트 건너뛰기"),
-            #             Q_ARG(str, f"버전 {latest_version}은(는) 건너뛰기로 설정되어 있습니다.")
-            #         )
-            #     self.update_in_progress = False
-            #     return
+            if latest_version == skip_version:
+                if not silent:
+                    QMetaObject.invokeMethod(
+                        self.parent,
+                        "show_info_message",
+                        Qt.QueuedConnection,
+                        Q_ARG(str, "업데이트 건너뛰기"),
+                        Q_ARG(str, f"버전 {latest_version}은(는) 건너뛰기로 설정되어 있습니다.")
+                    )
+                self.update_in_progress = False
+                return
             
             if latest_version == self.current_version:
                 if not silent:
@@ -722,20 +722,20 @@ class PinManagerApp(QMainWindow):
         settings_menu.addSeparator()
 
         # 업데이트 메뉴 추가
-        # update_menu = QMenu('업데이트 설정', self)
+        update_menu = QMenu('업데이트 설정', self)
 
         # # 자동 업데이트 확인 액션 추가
         settings_update = QAction('실행시 업데이트 확인', self, checkable=True)
         settings_update.setChecked(config['SETTING']['auto_update'] == 'True')
         settings_update.triggered.connect(self.update_settings_change)
-        # update_menu.addAction(settings_update)
-        settings_menu.addAction(settings_update)
+        update_menu.addAction(settings_update)
+        # settings_menu.addAction(settings_update)
 
         # 건너뛰기 설정 초기화 메뉴 추가
-        # reset_skip_action = QAction('업데이트 건너뛰기 설정 초기화', self)
-        # reset_skip_action.triggered.connect(self.reset_skip_version)
-        # update_menu.addAction(reset_skip_action)
-        # settings_menu.addMenu(update_menu)
+        reset_skip_action = QAction('업데이트 건너뛰기 설정 초기화', self)
+        reset_skip_action.triggered.connect(self.reset_skip_version)
+        update_menu.addAction(reset_skip_action)
+        settings_menu.addMenu(update_menu)
 
         # 자동 제출 확인 액션 추가 
         settings_submit = QAction('자동 결제 활성화', self, checkable=True)
@@ -896,7 +896,7 @@ class PinManagerApp(QMainWindow):
         # return msg_box.exec()
         # 버튼 추가 - 업데이트, 건너뛰기, 취소
         update_button = msg_box.addButton("업데이트", QMessageBox.YesRole)
-        # skip_button = msg_box.addButton("이 버전 건너뛰기", QMessageBox.ActionRole)
+        skip_button = msg_box.addButton("이 버전 건너뛰기", QMessageBox.ActionRole)
         cancel_button = msg_box.addButton("취소", QMessageBox.NoRole)
         
         msg_box.setDefaultButton(update_button)
@@ -907,10 +907,10 @@ class PinManagerApp(QMainWindow):
         
         if clicked_button == update_button:
             return QMessageBox.Yes
-        # elif clicked_button == skip_button:
-        #     # 건너뛰기 버튼이 클릭된 경우 건너뛸 버전 설정 저장
-        #     self.skip_version(version)
-        #     return QMessageBox.No
+        elif clicked_button == skip_button:
+            # 건너뛰기 버튼이 클릭된 경우 건너뛸 버전 설정 저장
+            self.skip_version(version)
+            return QMessageBox.No
         else:  # 취소 버튼
             return QMessageBox.No
 
