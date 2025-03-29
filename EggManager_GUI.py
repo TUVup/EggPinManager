@@ -88,13 +88,10 @@ def config_read():
 
 class AutoUpdater:
     def __init__(self, current_version, parent=None):
-        response = requests.get("https://api.github.com/repos/TUVup/EggPinManager/releases/latest")
-        response.raise_for_status()
-        latest_version = response.json()["tag_name"]
         self.current_version = f"v{current_version}"
         self.parent = parent
         self.github_api_url = "https://api.github.com/repos/TUVup/EggPinManager/releases/latest"
-        self.github_download_url = f"https://github.com/TUVup/EggPinManager/releases/latest/download/EggManager_{str(latest_version).replace("v", "")}.zip"
+        self.github_download_url = "https://github.com/TUVup/EggPinManager/releases/latest/download/EggManager.zip"
         self.update_in_progress = False
         self.temp_dir = None
         self.update_thread = None
@@ -126,41 +123,53 @@ class AutoUpdater:
             latest_release = response.json()
             latest_version = latest_release["tag_name"]
             release_notes = latest_release.get("body", "업데이트 내용이 제공되지 않았습니다.")
+
+            skip_version = config['UPDATE'].get('skip_version', '')
+
+            # 건너뛸 버전과 동일한 경우 업데이트 알림 표시하지 않음
+            if latest_version == skip_version:
+                if not silent:
+                    QMetaObject.invokeMethod(
+                        self.parent,
+                        "show_info_message",
+                        Qt.QueuedConnection,
+                        Q_ARG(str, "업데이트 건너뛰기"),
+                        Q_ARG(str, f"버전 {latest_version}은(는) 건너뛰기로 설정되어 있습니다.")
+                    )
+                self.update_in_progress = False
+                return
             
             if latest_version == self.current_version:
-                if not silent:
-                    # 현재 스레드가 메인 스레드가 아니므로 GUI 업데이트를 메인 스레드에 위임
-                    QMetaObject.invokeMethod(
-                        self.parent, 
-                        "show_info_message", 
-                        Qt.QueuedConnection,
-                        Q_ARG(str, "업데이트 확인"), 
-                        Q_ARG(str, "현재 최신 버전입니다.")
-                    )
+                QMetaObject.invokeMethod(
+                    self.parent, 
+                    "show_info_message", 
+                    Qt.QueuedConnection,
+                    Q_ARG(str, "업데이트 확인"), 
+                    Q_ARG(str, "현재 최신 버전입니다.")
+                )
                 self.update_in_progress = False
                 return
             
             # 업데이트 가능한 버전이 있는 경우
             # GUI 스레드에 다이얼로그 표시 요청
-            if not silent:
-                result = QMetaObject.invokeMethod(
-                    self.parent,
-                    "show_update_dialog",
-                    Qt.BlockingQueuedConnection,
-                    Q_RETURN_ARG(int),
-                    Q_ARG(str, latest_version),
-                    Q_ARG(str, release_notes)
-                )
-                
-                if result != QMessageBox.Yes:
-                    self.update_in_progress = False
-                    return
+            result = QMetaObject.invokeMethod(
+                self.parent,
+                "show_update_dialog",
+                Qt.BlockingQueuedConnection,
+                Q_RETURN_ARG(int),
+                Q_ARG(str, latest_version),
+                Q_ARG(str, release_notes)
+            )
+            
+            if result != QMessageBox.Yes:
+                self.update_in_progress = False
+                return
             
             # 업데이트 파일 다운로드 및 설치
             self._download_and_install_update(latest_version)
             
         except Exception as e:
-            if not silent and not self.cancel_requested:
+            if not self.cancel_requested:
                 QMetaObject.invokeMethod(
                     self.parent,
                     "show_warning_with_copy",
@@ -671,7 +680,7 @@ class PinManagerApp(QMainWindow):
 
         if config['SETTING']['auto_update'] == 'True':
             # print("자동 업데이트가 활성화되어 있습니다.")
-            self.check_for_updates()
+            self.check_for_updates(silent=True)  # 자동 업데이트 확인
 
     def initUI(self):
         # UI 초기화 및 설정
@@ -710,11 +719,20 @@ class PinManagerApp(QMainWindow):
         settings_menu.addAction(update_action)
         settings_menu.addSeparator()
 
+        # 업데이트 메뉴 추가
+        update_menu = QMenu('업데이트 설정', self)
+
         # # 자동 업데이트 확인 액션 추가
         settings_update = QAction('실행시 업데이트 확인', self, checkable=True)
         settings_update.setChecked(config['SETTING']['auto_update'] == 'True')
         settings_update.triggered.connect(self.update_settings_change)
-        settings_menu.addAction(settings_update)
+        update_menu.addAction(settings_update)
+
+        # 건너뛰기 설정 초기화 메뉴 추가
+        reset_skip_action = QAction('업데이트 건너뛰기 설정 초기화', self)
+        reset_skip_action.triggered.connect(self.reset_skip_version)
+        update_menu.addAction(reset_skip_action)
+        settings_menu.addMenu(update_menu)
 
         # 자동 제출 확인 액션 추가 
         settings_submit = QAction('자동 결제 활성화', self, checkable=True)
@@ -818,9 +836,9 @@ class PinManagerApp(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.theme_dock)
         self.theme_dock.hide()
 
-    def check_for_updates(self):
+    def check_for_updates(self, silent=False):
         """사용자가 요청한 업데이트 확인"""
-        self.auto_updater.check_for_updates_async(silent=False)
+        self.auto_updater.check_for_updates_async(silent)
 
     @Slot(str, str)
     def show_info_message(self, title, message):
@@ -834,7 +852,6 @@ class PinManagerApp(QMainWindow):
         msg_box.setIcon(QMessageBox.Question)
         msg_box.setWindowTitle("업데이트 확인")
         msg_box.setText(f"새 버전 {version}이(가) 있습니다. 업데이트 하시겠습니까?")
-        # msg_box.setStyleSheet("QLabel{min-width: 400px;}")  # 메인 텍스트 영역 넓이 설정
 
         # 스크롤 영역 추가
         scroll_area = QScrollArea()
@@ -871,9 +888,28 @@ class PinManagerApp(QMainWindow):
         layout.setRowStretch(layout.rowCount(), 1)
 
         # 버튼 추가
-        msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-        msg_box.setDefaultButton(QMessageBox.Yes)
-        return msg_box.exec()
+        # msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        # msg_box.setDefaultButton(QMessageBox.Yes)
+        # return msg_box.exec()
+        # 버튼 추가 - 업데이트, 건너뛰기, 취소
+        update_button = msg_box.addButton("업데이트", QMessageBox.YesRole)
+        skip_button = msg_box.addButton("이 버전 건너뛰기", QMessageBox.ActionRole)
+        cancel_button = msg_box.addButton("취소", QMessageBox.NoRole)
+        
+        msg_box.setDefaultButton(update_button)
+        msg_box.exec()
+        
+        # 클릭된 버튼 확인
+        clicked_button = msg_box.clickedButton()
+        
+        if clicked_button == update_button:
+            return QMessageBox.Yes
+        elif clicked_button == skip_button:
+            # 건너뛰기 버튼이 클릭된 경우 건너뛸 버전 설정 저장
+            self.skip_version(version)
+            return QMessageBox.No
+        else:  # 취소 버튼
+            return QMessageBox.No
 
     @Slot(str, str)
     def show_download_progress(self, url, path):
@@ -972,6 +1008,44 @@ class PinManagerApp(QMainWindow):
                 QApplication.quit()
             except Exception as e:
                 self.show_warning_with_copy("업데이트 오류", f"업데이트 스크립트 실행 중 오류가 발생했습니다: {str(e)}")
+
+    def skip_version(self, version):
+        """특정 버전 업데이트를 건너뛰도록 설정"""
+        # 건너뛸 버전을 config에 저장
+        config['UPDATE']['skip_version'] = version
+        # 설정 파일에 변경 사항 저장
+        with open('config.ini', 'w', encoding='utf-8') as configfile:
+            config.write(configfile)
+        
+        QMessageBox.information(
+            self, 
+            "업데이트 건너뛰기", 
+            f"버전 {version}은(는) 다음 업데이트까지 알림이 표시되지 않습니다."
+        )
+
+    def reset_skip_version(self):
+        """건너뛰기로 설정된 버전 설정 초기화"""
+        current_skip = config['UPDATE'].get('skip_version', '')
+        
+        if not current_skip:
+            QMessageBox.information(self, "설정 초기화", "건너뛰기로 설정된 버전이 없습니다.")
+            return
+            
+        # 사용자 확인
+        reply = QMessageBox.question(
+            self, 
+            "설정 초기화", 
+            f"현재 건너뛰기로 설정된 버전 {current_skip}에 대한 설정을 초기화하시겠습니까?\n"
+            "초기화하면 다음 실행 시 업데이트 알림이 표시됩니다.",
+            QMessageBox.Yes | QMessageBox.No, 
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            config['UPDATE']['skip_version'] = ''
+            with open('config.ini', 'w', encoding='utf-8') as configfile:
+                config.write(configfile)
+            QMessageBox.information(self, "설정 초기화 완료", "업데이트 건너뛰기 설정이 초기화되었습니다.")
 
     def show_theme_selector(self):
         self.theme_dock.show()
