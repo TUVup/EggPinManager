@@ -13,22 +13,403 @@ from PySide6.QtWidgets import *
 from PySide6.QtCore import *
 from PySide6.QtGui import *
 import configparser as cp
+import pywinauto
+from pywinauto import Application
+from win32api import GetSystemMetrics
+import win32con
+import win32gui
+import threading
+import urllib.request
+import zipfile
+import shutil
+import subprocess
+import tempfile
 
-current_version = "v1.1.3"
+current_version = "1.2.0"
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
 user32 = ctypes.windll.user32
 
 def config_read():
-    if not config.read('config.ini'):
-        # print("설정 파일을 찾을 수 없습니다. 새로운 설정 파일을 생성합니다.")
-        config['DEFAULT'] = {'pin_file': 'pins.json', 'txt_file': 'pins.txt', 'log_file': 'pin_usage_log.txt'}
-        config['SETTING'] = {'auto_update': 'True', 'auto_submit': 'False', 'theme': 'Light'}
+    # 기본 설정값 정의
+    default_settings = {
+        'DEFAULT': {
+            'pin_file': 'pins.json',
+            'txt_file': 'pins.txt',
+            'log_file': 'pin_usage_log.txt'
+        },
+        'SETTING': {
+            'auto_update': 'True',
+            'auto_submit': 'False',
+            'theme': 'Light',
+            'size_adjust': 'True'
+        },
+        'UPDATE': {
+            'last_check': '0',  # 마지막 업데이트 확인 시간 (UNIX 타임스탬프)
+            'check_interval': '86400',  # 업데이트 확인 간격 (초 단위, 기본 1일)
+            'skip_version': '',  # 건너뛸 버전
+        }
+    }
+    
+    # 설정 파일 읽기 시도
+    config_file_exists = config.read('config.ini')
+    config_changed = False
+    
+    if not config_file_exists:
+        # 설정 파일이 없는 경우 기본값으로 새로 생성
+        for section, options in default_settings.items():
+            if section not in config:
+                config[section] = {}
+            for option, value in options.items():
+                config[section][option] = value
+        config_changed = True
+    else:
+        # 설정 파일이 존재하는 경우, 필요한 항목이 누락되었는지 확인하고 추가
+        for section, options in default_settings.items():
+            if section not in config:
+                config[section] = {}
+                config_changed = True
+            
+            for option, value in options.items():
+                if option not in config[section]:
+                    config[section][option] = value
+                    config_changed = True
+    
+    # 변경된 경우 설정 파일 저장
+    if config_changed:
         with open('config.ini', 'w', encoding='utf-8') as configfile:
             config.write(configfile)
-        config.read('config.ini')
+    
+    # resource 폴더가 없으면 생성
+    os.makedirs("resource", exist_ok=True)
+    
     return config
+
+class AutoUpdater:
+    def __init__(self, current_version, parent=None):
+        response = requests.get("https://api.github.com/repos/TUVup/EggPinManager/releases/latest")
+        response.raise_for_status()
+        latest_version = response.json()["tag_name"]
+        self.current_version = f"v{current_version}"
+        self.parent = parent
+        self.github_api_url = "https://api.github.com/repos/TUVup/EggPinManager/releases/latest"
+        self.github_download_url = f"https://github.com/TUVup/EggPinManager/releases/latest/download/EggManager_{str(latest_version).replace("v", "")}.zip"
+        self.update_in_progress = False
+        self.temp_dir = None
+        self.update_thread = None
+        self.cancel_requested = False  # 취소 요청 플래그 추가
+        self.download_thread = None  # 다운로드 스레드 참조 추가
+        self.update_completed = False  # 업데이트 완료 플래그 추가
+    
+    def check_for_updates_async(self, silent=False):
+        """백그라운드 스레드에서 업데이트 확인"""
+        if self.update_in_progress:
+            return
+            
+        self.cancel_requested = False  # 취소 플래그 초기화
+        self.update_thread = threading.Thread(
+            target=self._check_and_update, 
+            args=(silent,),
+            daemon=True
+        )
+        self.update_thread.start()
+    
+    def _check_and_update(self, silent=False):
+        """업데이트 확인 및 설치 프로세스"""
+        self.update_in_progress = True
+        try:
+            # 최신 버전 정보 가져오기
+            response = requests.get(self.github_api_url, timeout=10)
+            response.raise_for_status()
+            
+            latest_release = response.json()
+            latest_version = latest_release["tag_name"]
+            release_notes = latest_release.get("body", "업데이트 내용이 제공되지 않았습니다.")
+            
+            if latest_version == self.current_version:
+                if not silent:
+                    # 현재 스레드가 메인 스레드가 아니므로 GUI 업데이트를 메인 스레드에 위임
+                    QMetaObject.invokeMethod(
+                        self.parent, 
+                        "show_info_message", 
+                        Qt.QueuedConnection,
+                        Q_ARG(str, "업데이트 확인"), 
+                        Q_ARG(str, "현재 최신 버전입니다.")
+                    )
+                self.update_in_progress = False
+                return
+            
+            # 업데이트 가능한 버전이 있는 경우
+            # GUI 스레드에 다이얼로그 표시 요청
+            if not silent:
+                result = QMetaObject.invokeMethod(
+                    self.parent,
+                    "show_update_dialog",
+                    Qt.BlockingQueuedConnection,
+                    Q_RETURN_ARG(int),
+                    Q_ARG(str, latest_version),
+                    Q_ARG(str, release_notes)
+                )
+                
+                if result != QMessageBox.Yes:
+                    self.update_in_progress = False
+                    return
+            
+            # 업데이트 파일 다운로드 및 설치
+            self._download_and_install_update(latest_version)
+            
+        except Exception as e:
+            if not silent and not self.cancel_requested:
+                QMetaObject.invokeMethod(
+                    self.parent,
+                    "show_warning_with_copy",
+                    Qt.QueuedConnection,
+                    Q_ARG(str, "업데이트 오류"),
+                    Q_ARG(str, f"업데이트 확인 중 오류가 발생했습니다: {str(e)}")
+                )
+            self.update_in_progress = False
+    
+    def _download_and_install_update(self, version):
+        """업데이트 파일 다운로드 및 설치"""
+        try:
+            # 임시 디렉토리 생성
+            self.temp_dir = tempfile.mkdtemp()
+            zip_path = os.path.join(self.temp_dir, "update.zip")
+            
+            # 다운로드 진행 상황을 보여주는 다이얼로그 표시
+            QMetaObject.invokeMethod(
+                self.parent,
+                "show_download_progress",
+                Qt.QueuedConnection,
+                Q_ARG(str, self.github_download_url),
+                Q_ARG(str, zip_path)
+            )
+            
+            # 파일 다운로드 (별도 스레드에서 실행)
+            self._download_file(self.github_download_url, zip_path)
+            
+            # 취소 요청 확인
+            if self.cancel_requested:
+                self.update_in_progress = False
+                return
+            
+            # 업데이트 파일 압축 해제 및 설치
+            QMetaObject.invokeMethod(
+                self.parent,
+                "show_install_progress",
+                Qt.QueuedConnection
+            )
+            
+            # 압축 해제
+            extract_dir = os.path.join(self.temp_dir, "extract")
+            os.makedirs(extract_dir, exist_ok=True)
+            
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+            
+            # 취소 요청이 있는지 다시 확인
+            if self.cancel_requested:
+                self.update_in_progress = False
+                return
+            
+            # 업데이트 스크립트 생성
+            self._create_update_script(extract_dir)
+            
+            # 애플리케이션 종료 및 업데이트 스크립트 실행
+            QMetaObject.invokeMethod(
+                self.parent,
+                "restart_for_update",
+                Qt.QueuedConnection
+            )
+            
+        except Exception as e:
+            if not self.cancel_requested:
+                QMetaObject.invokeMethod(
+                    self.parent,
+                    "show_warning_with_copy",
+                    Qt.QueuedConnection,
+                    Q_ARG(str, "업데이트 설치 오류"),
+                    Q_ARG(str, f"업데이트 설치 중 오류가 발생했습니다: {str(e)}")
+                )
+            
+            # 임시 디렉토리 정리
+            if self.temp_dir and os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir, ignore_errors=True)
+                
+            self.update_in_progress = False
+
+    def _download_file(self, url, destination):
+        """파일 다운로드 함수 (취소 가능)"""
+        try:
+            # 스트림 방식으로 다운로드 (메모리 효율적)
+            with requests.get(url, stream=True) as response:
+                response.raise_for_status()
+                total_size = int(response.headers.get('content-length', 0))
+                
+                # 다운로드 진행률 업데이트를 위한 변수
+                downloaded = 0
+                last_update = 0
+                
+                # 파일 쓰기
+                with open(destination, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if self.cancel_requested:
+                            # 취소 요청이 있으면 중단
+                            return
+                            
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            
+                            # 진행률 업데이트 (10% 단위로)
+                            if total_size > 0:
+                                progress = int((downloaded / total_size) * 100)
+                                if progress >= last_update + 5:
+                                    last_update = progress
+                                    QMetaObject.invokeMethod(
+                                        self.parent,
+                                        "update_download_progress",
+                                        Qt.QueuedConnection,
+                                        Q_ARG(int, progress)
+                                    )
+                # 다운로드 완료 시 100% 표시
+                QMetaObject.invokeMethod(
+                    self.parent,
+                    "update_download_progress",
+                    Qt.QueuedConnection,
+                    Q_ARG(int, 100)
+                )
+        except Exception as e:
+            if not self.cancel_requested:
+                # 오류 메시지 표시 (취소된 경우 제외)
+                QMetaObject.invokeMethod(
+                    self.parent,
+                    "show_warning_with_copy",
+                    Qt.QueuedConnection,
+                    Q_ARG(str, "다운로드 오류"),
+                    Q_ARG(str, f"파일 다운로드 중 오류가 발생했습니다: {str(e)}")
+                )
+    
+    def cancel_update(self):
+        """업데이트 취소"""
+        self.cancel_requested = True
+        
+        # 임시 디렉토리 정리
+        if self.temp_dir and os.path.exists(self.temp_dir):
+            try:
+                shutil.rmtree(self.temp_dir, ignore_errors=True)
+            except:
+                pass
+                
+        self.update_in_progress = False
+    
+    def _create_update_script(self, extract_dir):
+        """업데이트 스크립트 생성 (현재 프로세스 종료 후 파일 복사 및 재시작)"""
+        script_path = os.path.join(self.temp_dir, "update_script.bat")
+        current_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
+        # 실행 파일 경로 확인
+        if getattr(sys, 'frozen', False):
+            # 패키징된 실행 파일인 경우
+            executable = sys.executable  # 현재 실행 중인 EXE 파일 경로
+            app_name = os.path.basename(executable)
+            
+            # 버전 번호 패턴이 있는지 확인 (예: EggManager_1.1.3.exe)
+            base_name_pattern = re.search(r'(.*?)_[\d\.]+\.exe', app_name, re.IGNORECASE)
+            if base_name_pattern:
+                base_name = base_name_pattern.group(1)  # 기본 이름만 추출 (예: EggManager)
+            else:
+                base_name = os.path.splitext(app_name)[0]  # 확장자 제외한 이름
+        else:
+            # 스크립트로 실행 중인 경우
+            executable = sys.executable
+            app_path = os.path.abspath(sys.argv[0])
+            app_name = os.path.basename(app_path)
+            base_name = "python"
+        
+        # 새 실행 파일 찾기
+        new_exe_files = [f for f in os.listdir(extract_dir) if f.lower().endswith('.exe')]
+        
+        if new_exe_files:
+            # 새 EXE 파일이 있으면 사용
+            new_exe_name = new_exe_files[0]
+        else:
+            # 새 EXE 파일이 없으면 이름 패턴 만들기
+            new_exe_name = f"{base_name}.exe"  # 버전 번호 없이 기본 이름 사용
+        
+        with open(script_path, 'w', encoding='utf-8') as f:
+            f.write("@echo off\n")
+            f.write("color 0A\n")  # 검정 바탕에 녹색 글자로 설정
+            f.write("title EggManager 업데이트 진행 중...\n")
+            f.write("mode con: cols=80 lines=30\n")  # 콘솔 창 크기 설정
+            f.write("powershell -command \"$host.UI.RawUI.WindowTitle = 'EggManager 업데이트 진행 중...'\"\n")
+            
+            # 화면 지우기 및 헤더 표시
+            f.write("cls\n")
+            f.write("echo =============================================================\n")
+            f.write("echo                 EggManager 업데이트 진행 중...              \n")
+            f.write("echo =============================================================\n")
+            f.write("echo.\n")
+            f.write("echo 업데이트가 완료될 때까지 이 창을 닫지 마세요.\n")
+            f.write("echo.\n")
+            f.write("echo 1. 파일 백업 중...\n")
+            
+            # 기존 파일 백업
+            f.write(f"if not exist \"{current_dir}\\backup\" mkdir \"{current_dir}\\backup\"\n")
+            f.write(f"xcopy \"{current_dir}\\*.json\" \"{current_dir}\\backup\" /Y /Q\n")
+            f.write(f"xcopy \"{current_dir}\\*.txt\" \"{current_dir}\\backup\" /Y /Q\n")
+            f.write(f"xcopy \"{current_dir}\\*.ini\" \"{current_dir}\\backup\" /Y /Q\n")
+            f.write(f"if exist \"{current_dir}\\resource\" xcopy \"{current_dir}\\resource\\*.json\" \"{current_dir}\\backup\" /Y /Q\n")
+            
+            f.write("echo 완료.\n")
+            f.write("echo.\n")
+            f.write("echo 2. 이전 실행 파일 이름 변경 중...\n")
+            
+            # 기존 EXE 파일 삭제 (실행 중인 파일은 삭제할 수 없으므로 이름 변경)
+            f.write(f"if exist \"{current_dir}\\{app_name}\" ren \"{current_dir}\\{app_name}\" \"old_{app_name}.bak\"\n")
+            
+            f.write("echo 완료.\n")
+            f.write("echo.\n")
+            f.write("echo 3. 새 파일 복사 중...\n")
+            
+            # 새 파일 복사
+            f.write(f"xcopy \"{extract_dir}\\*\" \"{current_dir}\" /E /Y /Q\n")
+            
+            f.write("echo 완료.\n")
+            f.write("echo.\n")
+            f.write("echo 4. 새 버전 실행 준비 중...\n")
+            
+            # 프로그램 재시작 - 실행 파일 이름 변경 처리
+            f.write(f"if exist \"{current_dir}\\{new_exe_name}\" (\n")
+            f.write("    echo 새 버전을 시작합니다...\n")
+            f.write(f"    start \"\" \"{current_dir}\\{new_exe_name}\"\n")
+            f.write("    echo.\n")
+            f.write("    echo EggManager가 업데이트되었습니다!\n")
+            f.write(f") else (\n")
+            f.write("    echo.\n")
+            f.write("    echo 새 실행 파일을 찾을 수 없습니다.\n")
+            f.write("    echo 수동으로 프로그램을 실행해 주세요.\n")
+            f.write("    echo.\n")
+            f.write("    pause\n")
+            f.write(f")\n")
+            
+            # 백업 파일 정리 (나중에 삭제)
+            f.write("echo.\n")
+            f.write("echo 5. 임시 파일 정리 중...\n")
+            f.write(f"timeout /t 3 /nobreak >nul\n")
+            f.write(f"if exist \"{current_dir}\\old_{app_name}.bak\" del \"{current_dir}\\old_{app_name}.bak\"\n")
+            
+            f.write("echo 완료!\n")
+            f.write("echo.\n")
+            f.write("echo =============================================================\n")
+            f.write("echo                 업데이트가 완료되었습니다!                  \n")
+            f.write("echo =============================================================\n")
+            f.write("echo.\n")
+            f.write("echo 이 창은 5초 후 자동으로 닫힙니다.\n")
+            f.write("timeout /t 5\n")
+            f.write("exit\n")
+        
+        return script_path
 
 class PinManager:
     def __init__(self):
@@ -38,6 +419,7 @@ class PinManager:
         self.txt_filename = config["DEFAULT"]['txt_file']
         self.log_filename = config["DEFAULT"]['log_file']
         self.locked_pins_file = os.path.join("resource", "locked_pins.json")  # 잠긴 핀 저장 파일
+        self.stats_log_filename = os.path.join("resource", "pin_stats.json")  # 통계용 구조화된 로그 파일
         self.load_locked_pins()  # 잠긴 핀 정보 로드
 
     def load_pins(self):
@@ -134,11 +516,6 @@ class PinManager:
         return list(self.pins.items())
 
     def find_pins_for_amount(self, amount, select_pins = []):
-        # if select_pins:
-        #     sorted_pins = sorted(select_pins, key=lambda x: x[1])
-        # else:
-        #     sorted_pins = sorted(self.pins.items(), key=lambda x: x[1])
-        
         if select_pins:
             # 선택된 핀 중에서 잠기지 않은 핀만 필터링
             filtered_pins = [(pin, balance) for pin, balance in select_pins if pin not in self.locked_pins]
@@ -216,33 +593,101 @@ class PinManager:
                 self.locked_pins = set(json.load(file))
         except (FileNotFoundError, json.JSONDecodeError):
             self.locked_pins = set()
+
+    def load_stats_log(self):
+        """통계용 구조화된 로그 파일을 불러옵니다."""
+        try:
+            with open(self.stats_log_filename, "r", encoding='utf-8') as file:
+                return json.load(file)
+        except (FileNotFoundError, json.JSONDecodeError):
+            # 파일이 없거나 JSON 파싱 실패시 기본 구조 반환
+            return {
+                'total_amount': 0,
+                'years': {}
+            }
+    
+    def save_stats_log(self, stats_data):
+        """통계용 구조화된 로그 파일을 저장합니다."""
+        # resource 폴더가 없으면 생성
+        os.makedirs(os.path.dirname(self.stats_log_filename) or '.', exist_ok=True)
+        
+        with open(self.stats_log_filename, "w", encoding='utf-8') as file:
+            json.dump(stats_data, file, indent=4, ensure_ascii=False)
+    
+    def add_stats_log_entry(self, date_str, product_name, amount, pins_used):
+        """통계용 로그에 새 항목을 추가합니다."""
+        # 기존 로그 불러오기
+        stats_data = self.load_stats_log()
+        
+        # 날짜 파싱
+        date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+        year = date_obj.year
+        month = date_obj.month
+        day = date_obj.day
+        
+        # 총 금액 업데이트
+        stats_data['total_amount'] += amount
+        
+        # 연도별 통계 업데이트
+        if str(year) not in stats_data['years']:
+            stats_data['years'][str(year)] = {
+                'year_amount': 0,
+                'months': {}
+            }
+        stats_data['years'][str(year)]['year_amount'] += amount
+        
+        # 월별 통계 업데이트
+        if str(month) not in stats_data['years'][str(year)]['months']:
+            stats_data['years'][str(year)]['months'][str(month)] = {
+                'month_amount': 0,
+                'products': []
+            }
+        stats_data['years'][str(year)]['months'][str(month)]['month_amount'] += amount
+        
+        # 상품별 통계 추가
+        stats_data['years'][str(year)]['months'][str(month)]['products'].append({
+            'name': product_name,
+            'amount': amount,
+            'date': day,
+            
+            # 'pins_count': len(pins_used),
+            # 'pins_info': pins_used  # [(pin, original_balance, used_amount, remaining)]
+        })
+        
+        # 변경된 통계 저장
+        self.save_stats_log(stats_data)
     
 class PinManagerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.manager = PinManager()
-        if config['SETTING']['auto_update'] == 'True':
-            # print("자동 업데이트가 활성화되어 있습니다.")
-            self.auto_check_for_updates() # 프로그램 실행 시 업데이트 체크
+        self.auto_updater = AutoUpdater(current_version, self)
+            
         self.current_theme = config['SETTING'].get('theme', 'Light')  # 기본값은 Light
         self.apply_theme(self.current_theme)
         self.initUI()
         # 메뉴바 이벤트 필터 설치
         self.menuBar().installEventFilter(self)
 
+        if config['SETTING']['auto_update'] == 'True':
+            # print("자동 업데이트가 활성화되어 있습니다.")
+            self.check_for_updates()
+
     def initUI(self):
         # UI 초기화 및 설정
-        self.setWindowTitle(f"EggManager {current_version}")
-        # self.setWindowFlag(Qt.WindowStaysOnTopHint)
-        # self.setGeometry(300, 300, 600, 400)
+        self.setWindowTitle(f"EggManager v{current_version}")
         self.setMinimumSize(600, 400)
         ico = 'resource/eggui.ico'
         self.setWindowIcon(QIcon(ico))
 
         # 메뉴 바 추가
         menubar = self.menuBar()
-        # menubar.setStyleSheet("QMenuBar { background-color: #f0f0f0; }")
         settings_menu = menubar.addMenu('설정')
+
+        # 통계 메뉴 추가
+        statistics_action = QAction('통계', self)
+        statistics_action.triggered.connect(self.show_usage_statistics)
+        menubar.addAction(statistics_action)  # 메뉴바에 직접 액션 추가
 
         # 프로그램 정보 액션 추가
         about_action = QAction('프로그램 정보', self)
@@ -259,13 +704,13 @@ class PinManagerApp(QMainWindow):
         show_log.triggered.connect(self.show_log_file)
         settings_menu.addAction(show_log)
 
-        # 업데이트 액션 추가
+        # # 업데이트 액션 추가
         update_action = QAction('업데이트 확인', self)
         update_action.triggered.connect(self.check_for_updates)
         settings_menu.addAction(update_action)
         settings_menu.addSeparator()
 
-        # 자동 업데이트 확인 액션 추가
+        # # 자동 업데이트 확인 액션 추가
         settings_update = QAction('실행시 업데이트 확인', self, checkable=True)
         settings_update.setChecked(config['SETTING']['auto_update'] == 'True')
         settings_update.triggered.connect(self.update_settings_change)
@@ -276,6 +721,12 @@ class PinManagerApp(QMainWindow):
         settings_submit.setChecked(config['SETTING']['auto_submit'] == 'True')
         settings_submit.triggered.connect(self.auto_submit_settings_change)
         settings_menu.addAction(settings_submit)
+
+        # 사이즈 조절
+        settings_size_adjust = QAction('결제창 사이즈 자동 조절', self, checkable=True)
+        settings_size_adjust.setChecked(config['SETTING']['size_adjust'] == 'True')
+        settings_size_adjust.triggered.connect(self.size_adjust_change)
+        settings_menu.addAction(settings_size_adjust)
 
         # 테마 메뉴 추가
         theme_menu = QMenu('테마', self)
@@ -367,6 +818,161 @@ class PinManagerApp(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.theme_dock)
         self.theme_dock.hide()
 
+    def check_for_updates(self):
+        """사용자가 요청한 업데이트 확인"""
+        self.auto_updater.check_for_updates_async(silent=False)
+
+    @Slot(str, str)
+    def show_info_message(self, title, message):
+        """정보 메시지 표시 (스레드에서 호출 가능)"""
+        QMessageBox.information(self, title, message)
+
+    @Slot(str, str, result=int)
+    def show_update_dialog(self, version, release_notes):
+        """업데이트 대화상자 표시 (스레드에서 호출 가능)"""
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Question)
+        msg_box.setWindowTitle("업데이트 확인")
+        msg_box.setText(f"새 버전 {version}이(가) 있습니다. 업데이트 하시겠습니까?")
+        # msg_box.setStyleSheet("QLabel{min-width: 400px;}")  # 메인 텍스트 영역 넓이 설정
+
+        # 스크롤 영역 추가
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # 가로 스크롤바 숨기기
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(10, 10, 10, 10)  # 여백 추가
+
+        # 업데이트 내용 헤더와 본문 분리
+        notes_header = QLabel(f"<b>새 버전 {version}이(가) 있습니다. 업데이트 하시겠습니까?</b>")
+        notes_header.setAlignment(Qt.AlignLeft)
+        scroll_layout.addWidget(notes_header)
+        scroll_layout.addSpacing(20)  # 헤더와 본문 사이에 여백 추가
+
+        # 업데이트 내용
+        release_notes_label = QLabel(release_notes)
+        release_notes_label.setWordWrap(True)
+        release_notes_label.setTextFormat(Qt.MarkdownText)  # 마크다운 지원 (GitHub 형식)
+        release_notes_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        release_notes_label.setOpenExternalLinks(True)  # 링크 클릭 가능하게
+        release_notes_label.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)  # 텍스트 선택 가능
+        scroll_layout.addWidget(release_notes_label)
+
+        scroll_content.setLayout(scroll_layout)
+        scroll_area.setWidget(scroll_content)
+        scroll_area.setMinimumSize(400, 250)  # 스크롤 영역 크기 키움
+        scroll_area.setFrameStyle(QFrame.NoFrame)  # 테두리 제거
+
+        # 메시지 박스 레이아웃에 스크롤 영역 추가
+        layout = msg_box.layout()
+        layout.addWidget(scroll_area, 0, 0, 1, layout.columnCount())
+        layout.setRowStretch(0, 0)
+        layout.setRowStretch(layout.rowCount(), 1)
+
+        # 버튼 추가
+        msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg_box.setDefaultButton(QMessageBox.Yes)
+        return msg_box.exec()
+
+    @Slot(str, str)
+    def show_download_progress(self, url, path):
+        """다운로드 진행 상황 다이얼로그 표시 (취소 버튼 기능 추가)"""
+        self.progress_dialog = QProgressDialog("업데이트 파일 다운로드 중...", "취소", 0, 100, self)
+        self.progress_dialog.setWindowTitle("다운로드")
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setAutoClose(True)
+        self.progress_dialog.setMinimumDuration(0)
+        
+        # 취소 버튼 연결
+        self.progress_dialog.canceled.connect(self.cancel_download)
+
+        self.download_completed = False
+        
+        # 취소 요청 시 실행할 함수 정의
+        self.progress_dialog.show()
+        
+        # 진행 상황 업데이트를 위한 타이머 설정
+        self.download_timer = QTimer(self)
+        self.download_timer.timeout.connect(lambda: self.progress_dialog.setValue(self.progress_dialog.value() + 5 if self.progress_dialog.value() < 95 else 95))
+        self.download_timer.start(200)  # 200ms마다 업데이트
+        
+        return QDialog.Accepted  # 다이얼로그 표시 성공
+    
+    @Slot(int)
+    def update_download_progress(self, progress):
+        """다운로드 진행 상황 업데이트"""
+        if hasattr(self, 'progress_dialog') and self.progress_dialog:
+            self.progress_dialog.setValue(progress)
+
+            if progress >= 100 and hasattr(self, 'download_timer'):
+                self.download_timer.stop()
+                self.download_completed = True  # 다운로드 완료 플래그 설정
+
+    def cancel_download(self):
+        """다운로드 취소 처리"""
+        # 다운로드가 완료된 상태면 취소 처리하지 않음
+        if hasattr(self, 'download_completed') and self.download_completed:
+            return
+
+        if hasattr(self, 'download_timer') and self.download_timer.isActive():
+            self.download_timer.stop()
+        
+        # AutoUpdater에 취소 요청 전달
+        self.auto_updater.cancel_update()
+        
+        # 다이얼로그 닫기
+        if hasattr(self, 'progress_dialog') and self.progress_dialog:
+            self.progress_dialog.close()
+        
+        # 취소 알림
+        if not self.auto_updater.update_completed:
+            QMessageBox.information(self, "업데이트 취소", "업데이트가 취소되었습니다.")
+
+    @Slot()
+    def show_install_progress(self):
+        """설치 진행 상황 다이얼로그 표시"""
+        if hasattr(self, 'progress_dialog') and self.progress_dialog:
+            self.progress_dialog.setLabelText("업데이트 파일 설치 중...")
+            self.progress_dialog.setValue(100)
+            # 취소 버튼 비활성화 - 설치 단계에서는 취소 불가
+            self.download_completed = True
+            self.progress_dialog.setCancelButtonText("설치 중...")
+            self.progress_dialog.setCancelButton(None)
+            self.auto_updater.update_completed = True  # 업데이트 완료 플래그 설정
+        
+        if hasattr(self, 'download_timer') and self.download_timer.isActive():
+            self.download_timer.stop()
+
+    @Slot()
+    def restart_for_update(self):
+        """업데이트 후 재시작"""
+        if hasattr(self, 'progress_dialog') and self.progress_dialog:
+            self.progress_dialog.close()
+        
+        # 업데이트 확인
+        if self.auto_updater.cancel_requested:
+            return  # 취소된 경우 재시작하지 않음
+        
+        # 업데이트 스크립트 실행
+        script_path = os.path.join(self.auto_updater.temp_dir, "update_script.bat")
+        if os.path.exists(script_path):
+            try:
+                # 현재 작업 중인 내용 저장
+                self.manager.save_pins()
+                
+                # 업데이트 스크립트를 별도 프로세스로 실행
+                subprocess.Popen(
+                    [script_path],
+                    shell=True,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE
+                )
+                
+                # 현재 애플리케이션 종료
+                QApplication.quit()
+            except Exception as e:
+                self.show_warning_with_copy("업데이트 오류", f"업데이트 스크립트 실행 중 오류가 발생했습니다: {str(e)}")
+
     def show_theme_selector(self):
         self.theme_dock.show()
 
@@ -393,7 +999,7 @@ class PinManagerApp(QMainWindow):
         about_dialog = QDialog(self)
         about_dialog.setWindowTitle("프로그램 정보")
         layout = QVBoxLayout()
-        layout.addWidget(QLabel(f"EggManager {current_version}"))
+        layout.addWidget(QLabel(f"EggManager v{current_version}"))
         layout.addWidget(QLabel("개발자: TUVup"))
         layout.addWidget(QLabel("이 프로그램은 에그머니 PIN 관리를 위한 도구입니다."))
         button_box = QDialogButtonBox(QDialogButtonBox.Ok)
@@ -443,6 +1049,105 @@ class PinManagerApp(QMainWindow):
         if input_dialog.exec() == QDialog.Accepted:
             return amount_input.value(), True
         return None, False
+    
+    def show_usage_statistics(self):
+        """PIN 사용 통계를 표시합니다."""
+        try:
+            # 통계 데이터 로드
+            stats_data = self.manager.load_stats_log()
+            
+            # 통계 다이얼로그 생성
+            stats_dialog = QDialog(self)
+            stats_dialog.setWindowTitle("PIN 사용 통계")
+            stats_dialog.setMinimumSize(500, 400)
+            stats_dialog.setMaximumSize(500, 400)
+            
+            # 레이아웃 설정
+            layout = QVBoxLayout(stats_dialog)
+            
+            # 스크롤 영역 설정
+            scroll_area = QScrollArea()
+            scroll_area.setWidgetResizable(True)
+            scroll_content = QWidget()
+            scroll_layout = QVBoxLayout(scroll_content)
+            scroll_layout.setAlignment(Qt.AlignTop)
+            
+            # 총 누적 금액 표시
+            total_amount = stats_data.get('total_amount', 0)
+            total_label = QLabel(f"<h2>총 누적 금액: {'{0:,}'.format(total_amount)}원</h2>")
+            scroll_layout.addWidget(total_label)
+            
+            # 연도별 통계 표시
+            years = sorted(stats_data.get('years', {}).keys(), reverse=True)
+            for year in years:
+                year_stats = stats_data['years'][year]
+                year_label = QLabel(f"<h3>{year}년 (연간 사용 금액: {'{0:,}'.format(year_stats['year_amount'])}원)</h3>")
+                scroll_layout.addWidget(year_label)
+                
+                # 월별 통계 표시 (내림차순)
+                months = sorted(year_stats.get('months', {}).keys(), reverse=True)
+                for month in months:
+                    month_stats = year_stats['months'][month]
+                    month_label = QLabel(f"<h4>{month}월 (월간 사용 금액: {'{0:,}'.format(month_stats['month_amount'])}원)</h4>")
+                    # month_label.setStyleSheet("color: #333; margin-left: 20px;")
+                    month_label.setStyleSheet("margin-left: 20px;")
+                    scroll_layout.addWidget(month_label)
+                    
+                    # 상품별 통계 표시
+                    products = sorted(month_stats.get('products', []), key=lambda x: x['date'], reverse=True)
+                    for product in products:
+                        product_label = QLabel(f"{product['date']}일: {product['name']} - {'{0:,}'.format(product['amount'])}원")
+                        product_label.setStyleSheet("margin-left: 40px;")
+                        scroll_layout.addWidget(product_label)
+                
+                # 연도 간 구분선 추가
+                if year != years[-1]:  # 마지막 연도가 아니면 구분선 추가
+                    line = QFrame()
+                    line.setFrameShape(QFrame.HLine)
+                    line.setFrameShadow(QFrame.Sunken)
+                    scroll_layout.addWidget(line)
+            
+            # 데이터가 없는 경우 안내 메시지 표시
+            if not years:
+                no_data_label = QLabel("사용 내역이 없습니다.")
+                scroll_layout.addWidget(no_data_label)
+            
+            # 스크롤 영역 완성
+            scroll_area.setWidget(scroll_content)
+            layout.addWidget(scroll_area)
+            
+            # 닫기 버튼 추가
+            close_button = QPushButton("닫기")
+            close_button.clicked.connect(stats_dialog.accept)
+            layout.addWidget(close_button)
+            
+            # 다이얼로그 표시
+            stats_dialog.exec()
+        except Exception as e:
+            self.show_warning_with_copy("통계 오류", f"통계 정보를 불러오는 중 오류가 발생했습니다: {str(e)}")
+
+    @Slot(str, str)
+    def show_warning_with_copy(self, title, message):
+        """복사 기능이 포함된 경고 메시지 표시"""
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Warning)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(message)
+        
+        # 복사 버튼 추가
+        copy_button = msg_box.addButton("복사", QMessageBox.ActionRole)
+        ok_button = msg_box.addButton(QMessageBox.Ok)
+        msg_box.setDefaultButton(ok_button)
+        
+        # 메시지박스 표시
+        msg_box.exec()
+        
+        # 복사 버튼이 클릭되었는지 확인
+        if msg_box.clickedButton() == copy_button:
+            pyperclip.copy(message)
+            QMessageBox.information(self, "복사 완료", "오류 메시지가 클립보드에 복사되었습니다.")
+        
+        return msg_box.standardButton(msg_box.clickedButton())
     
     def mousePressEvent(self, event):
         # 테이블 위치와 크기 정보 가져오기
@@ -500,30 +1205,13 @@ class PinManagerApp(QMainWindow):
         with open('config.ini', 'w', encoding='utf-8') as configfile:
             config.write(configfile)
 
-    # GitHub에서 최신 릴리즈 정보를 확인하고 업데이트 여부를 묻는 기능
-    def check_for_updates(self):
-        try:
-            response = requests.get("https://api.github.com/repos/TUVup/EggPinManager/releases/latest")
-            response.raise_for_status()
-            latest_version = response.json()["tag_name"]
-            if latest_version != current_version:
-                reply = QMessageBox.question(self, "업데이트 확인", f"새 버전 {latest_version}이(가) 있습니다. 업데이트 하시겠습니까?", QMessageBox.Yes | QMessageBox.No)
-                if reply == QMessageBox.Yes:
-                    webbrowser.open("https://github.com/TUVup/EggPinManager/releases/latest")
-            else:
-                QMessageBox.information(self, "업데이트 확인", "현재 최신 버전입니다.")
-        except requests.RequestException as e:
-            QMessageBox.warning(self, "업데이트 확인 실패", f"업데이트 확인 중 오류가 발생했습니다: {e}")
-
-    # 프로그램 실행 시 자동으로 업데이트를 체크하는 기능
-    def auto_check_for_updates(self):
-        response = requests.get("https://api.github.com/repos/TUVup/EggPinManager/releases/latest")
-        response.raise_for_status()
-        latest_version = response.json()["tag_name"]
-        if latest_version != current_version:
-            reply = QMessageBox.question(self, "업데이트 확인", f"새 버전 {latest_version}이(가) 있습니다. 업데이트 하시겠습니까?", QMessageBox.Yes | QMessageBox.No)
-            if reply == QMessageBox.Yes:
-                webbrowser.open("https://github.com/TUVup/EggPinManager/releases/latest")
+    def size_adjust_change(self):
+        if config['SETTING']['size_adjust'] == 'True':
+            config['SETTING']['size_adjust'] = 'False'
+        else:
+            config['SETTING']['size_adjust'] = 'True'
+        with open('config.ini', 'w', encoding='utf-8') as configfile:
+            config.write(configfile)
     
     # PIN 목록을 로그 파일로부터 복구하는 함수
     def restore_pins(self):
@@ -800,7 +1488,7 @@ class PinManagerApp(QMainWindow):
                 message += "사용될 PIN 목록:\n" + "\n".join(pin_num)
             else:  # 5개 초과면 일부만 표시
                 message += "사용될 PIN 목록 (일부):\n" + "\n".join(pin_num[:5]) + f"\n... 외 {len(pin_num)-5}개"
-            selectbox.setText("\n사용 방법을 선택하세요.\n" + message + "\n사용될 총 금액: " + str('{0:,}'.format(sum(int(self.table.item(row, 1).text().replace(',', '')) for row in filtered_rows))) + "원")
+            selectbox.setText("\n사용 방법을 선택하세요.\n" + message + "\n사용가능한 총 금액: " + str('{0:,}'.format(sum(int(self.table.item(row, 1).text().replace(',', '')) for row in filtered_rows))) + "원")
             # PIN이 선택되었을 때 "선택된 PIN 사용" 버튼 추가
             # selected_pins = QPushButton("선택된 PIN 사용")
             # selectbox.addButton(selected_pins, QMessageBox.AcceptRole)
@@ -828,24 +1516,36 @@ class PinManagerApp(QMainWindow):
             if clicked_button == browser:
                 # 브라우저 사용
                 result = self.use_selected_pins_browser(selected_pins_data)
-                QMessageBox.information(self, "결과", result)
+                if isinstance(result, str) and ("❌" in result or "오류" in result or "실패" in result):
+                    self.show_warning_with_copy("오류", result)
+                else:
+                    QMessageBox.information(self, "결과", result)
                 self.update_table()
             elif clicked_button == ingame:
                 # HAOPLAY 사용
                 result = self.use_selected_pins_auto(selected_pins_data)
-                QMessageBox.information(self, "결과", result)
+                if isinstance(result, str) and ("❌" in result or "오류" in result or "실패" in result):
+                    self.show_warning_with_copy("오류", result)
+                else:
+                    QMessageBox.information(self, "결과", result)
                 self.update_table()
         elif clicked_button == ingame:
             ok = QMessageBox.question(self, "인게임 결제", "인게임 자동 결제를 사용하시겠습니까?")
             if ok == QMessageBox.Yes:
                 result = self.use_pins_auto()
-                QMessageBox.information(self, "결과", result)
+                if isinstance(result, str) and ("❌" in result or "오류" in result or "실패" in result):
+                    self.show_warning_with_copy("오류", result)
+                else:
+                    QMessageBox.information(self, "결과", result)
                 self.update_table()
         elif clicked_button == browser:
             amount, ok = QInputDialog.getInt(self, "브라우저 PIN 자동 채우기", "사용할 금액 입력:", step=1000)
             if ok and amount > 0:
                 result = self.use_pins_browser(amount)
-                QMessageBox.information(self, "결과", result)
+                if isinstance(result, str) and ("❌" in result or "오류" in result or "실패" in result):
+                    self.show_warning_with_copy("오류", result)
+                else:
+                    QMessageBox.information(self, "결과", result)
                 self.update_table()
 
     # 선택된 PIN을 브라우저에서 사용
@@ -877,7 +1577,9 @@ class PinManagerApp(QMainWindow):
         time.sleep(3)
         
         total_used = 0
-        new_log_entry = '브라우저 자동사용(선택된 PIN)\n'
+        new_log_entry = '브라우저 자동사용 - ' + str(amount) + '원\n'
+        pins_used_info = []  # 통계 로그용 정보 수집
+
         for pin, balance in selected_pins:
             if total_used >= amount:
                 break
@@ -886,6 +1588,7 @@ class PinManagerApp(QMainWindow):
             remaining_balance = balance - used_amount
             # 사용한 PIN 정보를 로그에 기록
             new_log_entry += f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} : {pin} [원금: {balance}] [사용된 금액: {used_amount}] [남은 잔액: {remaining_balance}]\n"
+            pins_used_info.append((pin, balance, used_amount, remaining_balance))
             if remaining_balance > 0:
                 self.manager.pins[pin] = remaining_balance
                 total_used = amount
@@ -893,7 +1596,8 @@ class PinManagerApp(QMainWindow):
                 del self.manager.pins[pin]
                 total_used += balance
 
-        self.log_pin_usage(new_log_entry)
+        # self.log_pin_usage(new_log_entry)
+        self.log_pin_usage(new_log_entry, "브라우저 자동사용", amount, pins_used_info)
         self.manager.save_pins()
         self.manager.save_pins_to_txt()
         self.table.clearSelection()
@@ -902,10 +1606,14 @@ class PinManagerApp(QMainWindow):
 
     # 선택된 PIN을 HAOPLAY에서 사용
     def use_selected_pins_auto(self, selected_pins):
+        if config['SETTING']['size_adjust'] == 'True':
+            self.adjust_window_size()
+            time.sleep(1)  # 창 크기 조절 후 잠시 대기
         # 현재 클립보드 데이터 저장
         original_clipboard = pyperclip.paste()
         total_used = 0
         new_log_entry = ""
+        pins_used_info = []  # 통계 로그용 정보 수집
         
         try:
             # 1️⃣ HAOPLAY 창 핸들 찾기
@@ -927,7 +1635,8 @@ class PinManagerApp(QMainWindow):
             pyautogui.hotkey('ctrl', '`') # Console 탭으로 이동
             time.sleep(0.2)
 
-            amount = int(self.find_amount())
+            # amount = int(self.find_amount())
+            amount = self.find_amount()
             product_name = self.find_Product()
             new_log_entry += f'{product_name} - {amount}원\n'
 
@@ -947,7 +1656,6 @@ class PinManagerApp(QMainWindow):
 
             # 4️⃣ 핀번호를 입력박스에 추가
             self.add_pin_input_box(len(pins_to_inject))
-            time.sleep(0.2)
 
             # 5️⃣ 핀번호들 자바스크립트를 통해 입력
             self.inject_pin_codes(pins_to_inject)
@@ -974,6 +1682,7 @@ class PinManagerApp(QMainWindow):
             remaining_balance = balance - used_amount
             # 사용한 PIN 정보를 로그에 기록
             new_log_entry += f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} : {pin} [원금: {balance}] [사용된 금액: {used_amount}] [남은 잔액: {remaining_balance}]\n"
+            pins_used_info.append((pin, balance, used_amount, remaining_balance))
             if remaining_balance > 0:
                 self.manager.pins[pin] = remaining_balance
                 total_used = amount
@@ -981,7 +1690,8 @@ class PinManagerApp(QMainWindow):
                 del self.manager.pins[pin]
                 total_used += balance
 
-        self.log_pin_usage(new_log_entry)
+        # self.log_pin_usage(new_log_entry)
+        self.log_pin_usage(new_log_entry, product_name, amount, pins_used_info)
         self.manager.save_pins()
         self.manager.save_pins_to_txt()
         self.table.clearSelection()
@@ -990,10 +1700,14 @@ class PinManagerApp(QMainWindow):
 
     # PIN 자동 사용 기능
     def use_pins_auto(self):
+        if config['SETTING']['size_adjust'] == 'True':
+            self.adjust_window_size()
+            time.sleep(1)  # 창 크기 조절 후 잠시 대기
         # 현재 클립보드 데이터 저장
         original_clipboard = pyperclip.paste()
         total_used = 0
         new_log_entry = ""
+        pins_used_info = []  # 통계 로그용 정보 수집
         try:
             # 1️⃣ HAOPLAY 창 핸들 찾기
             haoplay_hwnd = user32.FindWindowW(None, "HAOPLAY")
@@ -1018,7 +1732,8 @@ class PinManagerApp(QMainWindow):
             pyautogui.hotkey('ctrl', '`') # Console 탭으로 이동
             time.sleep(0.2)
 
-            amount = int(self.find_amount())
+            # amount = int(self.find_amount())
+            amount = self.find_amount()
             product_name = self.find_Product()
             new_log_entry += f'{product_name} - {amount}원\n'
 
@@ -1033,7 +1748,6 @@ class PinManagerApp(QMainWindow):
 
             # 4️⃣ 핀번호를 입력박스에 추가
             self.add_pin_input_box(len(pins_to_inject))
-            time.sleep(0.2)
 
             # 5️⃣ 핀번호들 자바스크립트를 통해 입력
             self.inject_pin_codes(pins_to_inject)
@@ -1062,6 +1776,7 @@ class PinManagerApp(QMainWindow):
             remaining_balance = balance - used_amount
             # 사용한 PIN 정보를 로그에 기록
             new_log_entry += f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} : {pin} [원금: {balance}] [사용된 금액: {used_amount}] [남은 잔액: {remaining_balance}]\n"
+            pins_used_info.append((pin, balance, used_amount, remaining_balance))
             if remaining_balance > 0:
                 self.manager.pins[pin] = remaining_balance
                 total_used = amount
@@ -1069,7 +1784,8 @@ class PinManagerApp(QMainWindow):
                 del self.manager.pins[pin]
                 total_used += balance
 
-        self.log_pin_usage(new_log_entry)
+        # self.log_pin_usage(new_log_entry)
+        self.log_pin_usage(new_log_entry, product_name, amount, pins_used_info)
         self.manager.save_pins()
         self.manager.save_pins_to_txt()
 
@@ -1088,7 +1804,8 @@ class PinManagerApp(QMainWindow):
         QMessageBox.information(self, "준비", "첫번째 핀 입력창의 첫번째 칸을 클릭하고 PIN이 입력될 준비를 하세요.\n3초 후 시작합니다.")
         time.sleep(3)
         total_used = 0
-        new_log_entry = '브라우저 자동사용\n'
+        new_log_entry = '브라우저 자동사용 - ' + str(amount) + '원\n'
+        pins_used_info = []  # 통계 로그용 정보 수집
         for pin, balance in selected_pins:
             if total_used >= amount:
                 break
@@ -1097,6 +1814,7 @@ class PinManagerApp(QMainWindow):
             remaining_balance = balance - used_amount
             # 사용한 PIN 정보를 로그에 기록
             new_log_entry += f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} : {pin} [원금: {balance}] [사용된 금액: {used_amount}] [남은 잔액: {remaining_balance}]\n"
+            pins_used_info.append((pin, balance, used_amount, remaining_balance))
             if remaining_balance > 0:
                 self.manager.pins[pin] = remaining_balance
                 total_used = amount
@@ -1104,26 +1822,65 @@ class PinManagerApp(QMainWindow):
                 del self.manager.pins[pin]
                 total_used += balance
 
-        self.log_pin_usage(new_log_entry)
+        # self.log_pin_usage(new_log_entry)
+        self.log_pin_usage(new_log_entry, "브라우저 자동사용", amount, pins_used_info)
         self.manager.save_pins()
         self.manager.save_pins_to_txt()
 
         return f"PIN {len(selected_pins)}개 {amount}원 사용이 완료되었습니다."
     
     # PIN 사용 로그를 파일에 기록하는 기능
-    def log_pin_usage(self, new_log_entry):
-        with open("pin_usage_log.txt", "w") as log_file:
-            log_file.write(new_log_entry)
+    def log_pin_usage(self, new_log_entry, product_name=None, total_amount=0, pins_used_info=None):
+        if pins_used_info is None:
+            pins_used_info = []
+        
+        try:
+            # 기존 로그 파일 저장 및 구조화된 로그 추가
+            with open("pin_usage_log.txt", "w", encoding='utf-8') as log_file:
+                log_file.write(new_log_entry)
+            
+            # 통계용 로그 저장 (product_name과 total_amount가 있을 때만)
+            if product_name and total_amount > 0 and pins_used_info:
+                self.manager.add_stats_log_entry(
+                    datetime.now().strftime('%Y-%m-%d'),
+                    product_name,
+                    total_amount,
+                    pins_used_info
+                )
+            
+            return True
+        except Exception as e:
+            self.show_warning_with_copy("로그 저장 오류", f"로그를 저장하는 중 오류가 발생했습니다: {str(e)}")
+            return False
 
     def find_amount(self):
         javascript_code = '''copy(document.evaluate('//*[@id="header"]/div/dl[2]/dd/strong', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.innerText);'''
         self.paste_javascript_code(javascript_code)
         time.sleep(0.2)
-        amount = pyperclip.paste()
-        amount = amount.replace(" ", "")
-        amount = amount.replace(",", "")
-        # print(amount)
-        return amount
+
+        # 클립보드에서 금액 가져오기 (pyperclip 사용)
+        amount_text = pyperclip.paste()
+
+        # 디버깅을 위한 출력
+        # print(f"클립보드에서 가져온 텍스트: '{amount_text}'")
+        
+        try:
+            # 쉼표와 공백 제거
+            amount_text = amount_text.replace(" ", "").replace(",", "")
+            
+            # 숫자만 추출 (텍스트에서 '원' 등의 단위가 포함될 경우)
+            amount_text = re.sub(r'[^\d]', '', amount_text)
+            
+            # 정수로 변환
+            return int(amount_text)
+        except ValueError as e:
+            # 변환 실패 시 예외 처리
+            QMessageBox.warning(self, "금액 감지 실패", f"금액을 가져오는데 실패했습니다.\n{amount_text}\n수동으로 금액을 입력해주세요.")
+            amount, ok = QInputDialog.getInt(self, "금액 수동 입력", "사용할 금액:", 0, 0, 1000000, 1000)
+            if ok:
+                return amount
+            else:
+                raise ValueError("금액 입력이 취소되었습니다.")
     
     def find_Product(self):
         javascript_code = '''copy(document.evaluate('//*[@id="header"]/div/dl[1]/dd', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.innerText);
@@ -1131,6 +1888,8 @@ class PinManagerApp(QMainWindow):
         self.paste_javascript_code(javascript_code)
         time.sleep(0.2)
         name = pyperclip.paste()
+        if not name:
+            return "알 수 없는 상품"
         return name
     
     # 핀을 입력할 박스를 추가하는 기능
@@ -1187,6 +1946,104 @@ class PinManagerApp(QMainWindow):
     def submit(self):
         javascript_code = 'goSubmit(document.form)'
         self.paste_javascript_code(javascript_code)
+
+    def adjust_window_size(self, window_title=None, browser_name=None):
+        """
+        브라우저 창 크기를 작업 표시줄과 겹치지 않게 조절합니다.
+        
+        Args:
+            window_title (str, optional): 창 제목. 제공되면 해당 제목의 창을 찾습니다.
+            browser_name (str, optional): 브라우저 이름. 'chrome', 'edge', 'firefox' 중 하나.
+        
+        Returns:
+            bool: 창 크기 조절 성공 여부
+        """
+        try:
+            # 작업 표시줄 정보 가져오기
+            taskbar_hwnd = win32gui.FindWindow("Shell_TrayWnd", None)
+            if not taskbar_hwnd:
+                self.show_warning_with_copy("오류", "작업 표시줄을 찾을 수 없습니다.")
+                return False
+                
+            # 작업 표시줄 위치 및 크기 가져오기
+            taskbar_rect = win32gui.GetWindowRect(taskbar_hwnd)
+            
+            # 화면 크기 가져오기
+            screen_width = GetSystemMetrics(0)   # 화면 너비
+            screen_height = GetSystemMetrics(1)  # 화면 높이
+            
+            # 작업 표시줄 위치 확인 (위, 아래, 왼쪽, 오른쪽)
+            taskbar_pos = 'bottom'  # 기본값
+            
+            # 작업 표시줄 위치 판단
+            if taskbar_rect[0] > 0:  # 왼쪽 가장자리가 0보다 크면 오른쪽이나 가운데
+                if taskbar_rect[1] > 0:  # 위쪽 가장자리가 0보다 크면 아래쪽이나 가운데
+                    if taskbar_rect[2] < screen_width:  # 오른쪽 가장자리가 화면 너비보다 작으면 왼쪽
+                        taskbar_pos = 'left'
+                    else:  # 그 외의 경우 오른쪽
+                        taskbar_pos = 'right'
+                else:  # 위쪽 가장자리가 0이면 위쪽
+                    taskbar_pos = 'top'
+            
+            # 검색할 창
+            window_found = False
+            hwnd = None
+            
+            # HAOPLAY 검색 (기본값)
+            haoplay_hwnd = win32gui.FindWindow(None, "HAOPLAY")
+            if haoplay_hwnd:
+                hwnd = haoplay_hwnd
+                window_found = True
+                
+            if not window_found or not hwnd:
+                self.show_warning_with_copy("오류", "조절할 창을 찾을 수 없습니다.")
+                return False
+            
+            # 창이 최소화되어 있으면 복원
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            
+            # 새 창 위치 및 크기 계산
+            current_rect = win32gui.GetWindowRect(hwnd)
+            current_x, current_y, current_right, current_bottom = current_rect
+            current_width = current_right - current_x
+            print(f"현재 창 크기: {current_width}x{current_bottom - current_y}")
+            
+            # 새 창 위치 및 크기 계산 - 가로 크기는 유지
+            new_x = 0  # 기본값으로 왼쪽 가장자리 사용
+            new_y = 0  # 기본값으로 위쪽 가장자리 사용
+            new_width = current_width # 현재 가로 크기 유지
+            new_height = screen_height  # 기본값으로 화면 높이 사용
+
+            if current_width > screen_width // 2:
+                # 가로 크기가 너무 크면 조정
+                new_width = screen_width // 2
+                # new_x = (screen_width - new_width) // 2
+            
+            taskbar_height = taskbar_rect[3] - taskbar_rect[1]
+            taskbar_width = taskbar_rect[2] - taskbar_rect[0]
+            
+            # 작업 표시줄 위치에 따라 창 높이만 조절
+            if taskbar_pos == 'bottom':
+                new_height = screen_height - taskbar_height
+            elif taskbar_pos == 'top':
+                new_y = taskbar_height
+                new_height = screen_height - taskbar_height
+            elif taskbar_pos == 'left' or taskbar_pos == 'right':
+                # 좌/우 작업 표시줄의 경우 높이만 조절
+                new_height = screen_height
+            
+            # 창 크기 및 위치 설정
+            win32gui.SetWindowPos(hwnd, win32con.HWND_TOP, new_x, new_y, new_width, new_height, win32con.SWP_SHOWWINDOW)
+            
+            # 창 활성화
+            win32gui.SetForegroundWindow(hwnd)
+            
+            return True
+            
+        except Exception as e:
+            self.show_warning_with_copy("오류", f"창 크기 조절 중 오류가 발생했습니다: {str(e)}")
+            return False
 
 
 if __name__ == "__main__":
