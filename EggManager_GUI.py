@@ -678,11 +678,11 @@ class PinManagerApp(QMainWindow):
         self.initUI()
         # 메뉴바 이벤트 필터 설치
         self.menuBar().installEventFilter(self)
-        self.check_for_updates(silent=True)
+        # self.check_for_updates(silent=True)
 
-        # if config['SETTING']['auto_update'] == 'True':
-        #     # print("자동 업데이트가 활성화되어 있습니다.")
-        #     self.check_for_updates(silent=True)  # 자동 업데이트 확인
+        if config['SETTING']['auto_update'] == 'True':
+            # print("자동 업데이트가 활성화되어 있습니다.")
+            self.check_for_updates(silent=True)  # 자동 업데이트 확인
 
     def initUI(self):
         # UI 초기화 및 설정
@@ -722,18 +722,19 @@ class PinManagerApp(QMainWindow):
         settings_menu.addSeparator()
 
         # 업데이트 메뉴 추가
-        update_menu = QMenu('업데이트 설정', self)
+        # update_menu = QMenu('업데이트 설정', self)
 
         # # 자동 업데이트 확인 액션 추가
         settings_update = QAction('실행시 업데이트 확인', self, checkable=True)
         settings_update.setChecked(config['SETTING']['auto_update'] == 'True')
         settings_update.triggered.connect(self.update_settings_change)
-        update_menu.addAction(settings_update)
+        # update_menu.addAction(settings_update)
+        settings_menu.addAction(settings_update)
 
         # 건너뛰기 설정 초기화 메뉴 추가
-        reset_skip_action = QAction('업데이트 건너뛰기 설정 초기화', self)
-        reset_skip_action.triggered.connect(self.reset_skip_version)
-        update_menu.addAction(reset_skip_action)
+        # reset_skip_action = QAction('업데이트 건너뛰기 설정 초기화', self)
+        # reset_skip_action.triggered.connect(self.reset_skip_version)
+        # update_menu.addAction(reset_skip_action)
         # settings_menu.addMenu(update_menu)
 
         # 자동 제출 확인 액션 추가 
@@ -749,7 +750,7 @@ class PinManagerApp(QMainWindow):
         settings_menu.addAction(settings_size_adjust)
 
         # 테마 메뉴 추가
-        theme_menu = QMenu('테마', self)
+        # theme_menu = QMenu('테마', self)
         theme_action = QAction('테마 선택', self)
         theme_action.triggered.connect(self.show_theme_selector)
         settings_menu.addAction(theme_action)
