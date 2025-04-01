@@ -25,7 +25,7 @@ import shutil
 import subprocess
 import tempfile
 
-current_version = "1.2.0"
+current_version = "1.2.1"
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
