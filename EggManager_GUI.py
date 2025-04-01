@@ -462,7 +462,7 @@ class PinManager:
     # 로그 파일로부터 PIN과 원금을 사용하여 PIN 목록을 복구하는 함수
     def load_pins_from_log(self):
         try:
-            with open(self.log_filename, "r") as log_file:
+            with open(self.log_filename, "r", encoding='utf-8') as log_file:
                 log_lines = log_file.readlines()
                 for line in log_lines:
                     match = re.search(r'(\d{5}-\d{5}-\d{5}-\d{5}) \[원금: (\d+)\]', line)
