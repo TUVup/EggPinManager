@@ -25,7 +25,7 @@ import shutil
 import subprocess
 import tempfile
 
-current_version = "1.2.1"
+current_version = "1.2.2"
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
@@ -715,6 +715,11 @@ class PinManagerApp(QMainWindow):
         show_log.triggered.connect(self.show_log_file)
         settings_menu.addAction(show_log)
 
+        restore_action = QAction("로그에서 PIN 복구", self)
+        restore_action.triggered.connect(self.restore_pins)
+        restore_action.setToolTip("로그 파일로부터 PIN 목록을 복구합니다.")
+        settings_menu.addAction(restore_action)
+
         # # 업데이트 액션 추가
         update_action = QAction('업데이트 확인', self)
         update_action.triggered.connect(self.check_for_updates)
@@ -783,6 +788,11 @@ class PinManagerApp(QMainWindow):
         btn_add.setToolTip("새로운 PIN을 추가합니다.")
         button_layout.addWidget(btn_add)
 
+        btn_add_multiple = QPushButton("PIN 일괄 추가", self)
+        btn_add_multiple.clicked.connect(self.add_multiple_pins)
+        btn_add_multiple.setToolTip("여러 PIN을 한 번에 추가합니다.")
+        button_layout.addWidget(btn_add_multiple)
+
         btn_delete = QPushButton("PIN 삭제", self)
         btn_delete.clicked.connect(self.delete_multiple_pins)  
         btn_delete.setToolTip("선택한 PIN을 모두 삭제합니다.")
@@ -793,10 +803,10 @@ class PinManagerApp(QMainWindow):
         btn_use.setToolTip("선택한 금액을 사용할 수 있는 PIN을 자동으로 사용합니다.")
         button_layout.addWidget(btn_use)
 
-        btn_restore = QPushButton("PIN 복구", self)
-        btn_restore.clicked.connect(self.restore_pins)
-        btn_restore.setToolTip("로그 파일로부터 PIN 목록을 복구합니다.")
-        button_layout.addWidget(btn_restore)
+        # btn_restore = QPushButton("PIN 복구", self)
+        # btn_restore.clicked.connect(self.restore_pins)
+        # btn_restore.setToolTip("로그 파일로부터 PIN 목록을 복구합니다.")
+        # button_layout.addWidget(btn_restore)
 
         layout.addLayout(button_layout)
 
@@ -1305,6 +1315,10 @@ class PinManagerApp(QMainWindow):
         add_action = QAction("PIN 추가", self)
         add_action.triggered.connect(self.add_pin)
         context_menu.addAction(add_action)
+
+        add_multiple_action = QAction("다중 PIN 추가", self)
+        add_multiple_action.triggered.connect(self.add_multiple_pins)
+        context_menu.addAction(add_multiple_action)
 
         edit_balance_action = QAction("잔액 수정", self)
         edit_balance_action.triggered.connect(self.edit_selected_pin_balance)
@@ -2122,6 +2136,239 @@ class PinManagerApp(QMainWindow):
             self.show_warning_with_copy("오류", f"창 크기 조절 중 오류가 발생했습니다: {str(e)}")
             return False
 
+    def add_multiple_pins(self):
+        """여러 개의 PIN을 한 번에 입력받는 기능"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("PIN 일괄 추가")
+        dialog.setMinimumWidth(500)
+        layout = QVBoxLayout(dialog)
+        
+        # 안내 레이블
+        info_label = QLabel(
+            "여러 PIN을 한 번에 입력하세요. 다음 형식을 지원합니다:\n"
+            "- 한 줄에 하나의 PIN (00000-00000-00000-00000 형식)\n"
+            "- 한 줄에 하나의 PIN (숫자만 20자리)\n"
+            "- 한 줄에 PIN과 잔액 (PIN,잔액 또는 PIN 잔액 형식)\n"
+            "- 복사한 텍스트에서 PIN 자동 감지"
+        )
+        layout.addWidget(info_label)
+        
+        # 텍스트 입력 영역
+        text_edit = QPlainTextEdit()
+        text_edit.setPlaceholderText("여기에 PIN을 입력하거나 붙여넣으세요...")
+        text_edit.setMinimumHeight(200)
+        layout.addWidget(text_edit)
+        
+        # 기본 잔액 입력
+        balance_layout = QHBoxLayout()
+        balance_layout.addWidget(QLabel("기본 잔액:"))
+        
+        default_balance = QSpinBox()
+        default_balance.setRange(1000, 1000000)
+        default_balance.setSingleStep(1000)
+        default_balance.setValue(10000)
+        balance_layout.addWidget(default_balance)
+        
+        # 잔액 퀵 선택 버튼들
+        for amount in [1000, 3000, 5000, 10000, 30000, 50000]:
+            btn = QPushButton(str(amount))
+            btn.clicked.connect(lambda _, val=amount: default_balance.setValue(val))
+            btn.setMaximumWidth(60)
+            balance_layout.addWidget(btn)
+        
+        layout.addLayout(balance_layout)
+        
+        # 미리보기 영역
+        preview_group = QGroupBox("추가될 PIN 미리보기")
+        preview_layout = QVBoxLayout(preview_group)
+        
+        preview_table = QTableWidget()
+        preview_table.setColumnCount(3)
+        preview_table.setHorizontalHeaderLabels(["PIN", "잔액", "상태"])
+        preview_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        preview_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        preview_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        preview_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        preview_layout.addWidget(preview_table)
+        
+        refresh_btn = QPushButton("미리보기 새로고침")
+        preview_layout.addWidget(refresh_btn)
+        
+        layout.addWidget(preview_group)
+        
+        # 버튼 영역
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+    
+        # PIN 검증 및 미리보기 함수
+        def parse_and_preview():
+            text = text_edit.toPlainText().strip()
+            if not text:
+                preview_table.setRowCount(0)
+                return
+            
+            lines = text.splitlines()
+            parsed_pins = []
+            
+            for line in lines:
+                line = line.strip()
+                if not line:  # 빈 줄 무시
+                    continue
+                    
+                # PIN과 잔액 분리 (PIN,잔액 또는 PIN 잔액 형식)
+                pin_balance = None
+                
+                # 쉼표로 구분된 형식 (PIN,잔액)
+                if ',' in line:
+                    parts = line.split(',', 1)
+                    pin_text = parts[0].strip()
+                    try:
+                        pin_balance = int(parts[1].strip().replace(',', ''))
+                    except:
+                        pin_balance = default_balance.value()
+                        
+                # 공백으로 구분된 형식 (PIN 잔액)
+                elif ' ' in line:
+                    parts = line.split()
+                    pin_text = parts[0].strip()
+                    # 마지막 부분이 숫자인지 확인
+                    try:
+                        pin_balance = int(parts[-1].replace(',', ''))
+                        # PIN 부분만 남기기
+                        pin_text = ' '.join(parts[:-1])
+                    except:
+                        pin_balance = default_balance.value()
+                else:
+                    pin_text = line
+                    pin_balance = default_balance.value()
+                
+                # PIN 형식 정리 및 확인
+                pin_text = pin_text.replace(" ", "").replace("\t", "")
+                
+                # PIN이 숫자만 포함된 20자리인 경우 형식 추가
+                if pin_text.isdigit() and len(pin_text) == 20:
+                    formatted_pin = f"{pin_text[:5]}-{pin_text[5:10]}-{pin_text[10:15]}-{pin_text[15:]}"
+                else:
+                    formatted_pin = pin_text
+                    
+                # PIN 형식 확인
+                is_valid = bool(re.match(r'^\d{5}-\d{5}-\d{5}-\d{5}$', formatted_pin))
+                
+                # 중복 확인
+                is_duplicate = formatted_pin in [p[0] for p in parsed_pins]
+                exists_in_manager = False
+                
+                if is_valid and not is_duplicate:
+                    exists_in_manager = (formatted_pin in self.manager.pins)
+                
+                # 상태 결정
+                if not is_valid:
+                    status = "유효하지 않은 형식"
+                    status_color = QColor(255, 0, 0)  # 빨간색
+                elif is_duplicate:
+                    status = "입력 중복"
+                    status_color = QColor(255, 165, 0)  # 주황색
+                elif exists_in_manager:
+                    status = "이미 존재함"
+                    status_color = QColor(255, 165, 0)  # 주황색
+                else:
+                    status = "추가 가능"
+                    status_color = QColor(0, 128, 0)  # 초록색
+                    
+                # 결과 추가
+                parsed_pins.append((formatted_pin, pin_balance, status, status_color, is_valid and not is_duplicate and not exists_in_manager))
+            
+            # 테이블에 결과 표시
+            preview_table.setRowCount(len(parsed_pins))
+            for row, (pin, balance, status, color, _) in enumerate(parsed_pins):
+                pin_item = QTableWidgetItem(pin)
+                balance_item = QTableWidgetItem(f"{balance:,}")
+                status_item = QTableWidgetItem(status)
+                
+                pin_item.setForeground(color)
+                status_item.setForeground(color)
+                
+                preview_table.setItem(row, 0, pin_item)
+                preview_table.setItem(row, 1, balance_item)
+                preview_table.setItem(row, 2, status_item)
+        
+        # 미리보기 버튼 클릭 시 PIN 검증 및 미리보기 수행
+        refresh_btn.clicked.connect(parse_and_preview)
+        
+        # 텍스트 내용이 변경될 때 자동으로 미리보기 업데이트
+        text_edit.textChanged.connect(parse_and_preview)
+        
+        # 다이얼로그 표시
+        if dialog.exec() == QDialog.Accepted:
+            text = text_edit.toPlainText().strip()
+            if not text:
+                return
+                
+            lines = text.splitlines()
+            added_count = 0
+            skipped_count = 0
+            duplicated_count = 0
+            
+            for line in lines:
+                line = line.strip()
+                if not line:  # 빈 줄 무시
+                    continue
+                    
+                # PIN과 잔액 분리
+                pin_balance = None
+                
+                # 쉼표로 구분된 형식 (PIN,잔액)
+                if ',' in line:
+                    parts = line.split(',', 1)
+                    pin_text = parts[0].strip()
+                    try:
+                        pin_balance = int(parts[1].strip().replace(',', ''))
+                    except:
+                        pin_balance = default_balance.value()
+                        
+                # 공백으로 구분된 형식 (PIN 잔액)
+                elif ' ' in line:
+                    parts = line.split()
+                    pin_text = parts[0].strip()
+                    # 마지막 부분이 숫자인지 확인
+                    try:
+                        pin_balance = int(parts[-1].replace(',', ''))
+                        # PIN 부분만 남기기
+                        pin_text = ' '.join(parts[:-1])
+                    except:
+                        pin_balance = default_balance.value()
+                else:
+                    pin_text = line
+                    pin_balance = default_balance.value()
+                
+                # PIN 형식 정리 및 확인
+                pin_text = pin_text.replace(" ", "").replace("\t", "")
+                
+                # PIN이 숫자만 포함된 20자리인 경우 형식 추가
+                if pin_text.isdigit() and len(pin_text) == 20:
+                    formatted_pin = f"{pin_text[:5]}-{pin_text[5:10]}-{pin_text[10:15]}-{pin_text[15:]}"
+                else:
+                    formatted_pin = pin_text
+                
+                # PIN 형식 및 중복 확인
+                if not self.manager.is_valid_pin_format(formatted_pin):
+                    skipped_count += 1
+                    continue
+                    
+                if formatted_pin in self.manager.pins:
+                    duplicated_count += 1
+                    continue
+                    
+                # PIN 추가
+                self.manager.add_pin(formatted_pin, pin_balance)
+                added_count += 1
+            
+            # 결과 메시지 및 UI 업데이트
+            message = f"추가: {added_count}개\n중복: {duplicated_count}개\n형식 오류: {skipped_count}개"
+            QMessageBox.information(self, "PIN 일괄 추가 결과", message)
+            self.update_table()
 
 if __name__ == "__main__":
     config_read()
