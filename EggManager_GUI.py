@@ -25,7 +25,7 @@ import shutil
 import subprocess
 import tempfile
 
-current_version = "1.2.2"
+current_version = "1.2.3"
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
@@ -788,7 +788,7 @@ class PinManagerApp(QMainWindow):
         btn_add.setToolTip("새로운 PIN을 추가합니다.")
         button_layout.addWidget(btn_add)
 
-        btn_add_multiple = QPushButton("PIN 일괄 추가", self)
+        btn_add_multiple = QPushButton("향상된 PIN 추가(beta)", self)
         btn_add_multiple.clicked.connect(self.add_multiple_pins)
         btn_add_multiple.setToolTip("여러 PIN을 한 번에 추가합니다.")
         button_layout.addWidget(btn_add_multiple)
@@ -2137,7 +2137,7 @@ class PinManagerApp(QMainWindow):
             return False
 
     def add_multiple_pins(self):
-        """여러 개의 PIN을 한 번에 입력받는 기능"""
+        """여러 개의 PIN을 한 번에 입력받는 기능 (다양한 형식 지원)"""
         dialog = QDialog(self)
         dialog.setWindowTitle("PIN 일괄 추가")
         dialog.setMinimumWidth(500)
@@ -2146,18 +2146,37 @@ class PinManagerApp(QMainWindow):
         # 안내 레이블
         info_label = QLabel(
             "여러 PIN을 한 번에 입력하세요. 다음 형식을 지원합니다:\n"
-            "- 한 줄에 하나의 PIN (00000-00000-00000-00000 형식)\n"
-            "- 한 줄에 하나의 PIN (숫자만 20자리)\n"
-            "- 한 줄에 PIN과 잔액 (PIN,잔액 또는 PIN 잔액 형식)\n"
+            "- PIN 형식: 00000-00000-00000-00000 또는 숫자만 20자리\n"
+            "             [에그머니-1만원권] PIN 또는 [에그머니-5천원] PIN 등\n"
+            "- 직접입력용 PIN, 금액 구분: 00000-00000-00000-00000 10000 또는\n"
+            "    00000-00000-00000-00000,5000 등으로 핀과 금액을 입력할 수 있습니다.\n"
+            "- 줄 구분: PIN과 금액이 개행으로 나뉘어도 자동 인식됩니다.\n"
             "- 복사한 텍스트에서 PIN 자동 감지"
         )
         layout.addWidget(info_label)
+
+        example_btn = QPushButton("예시 보기", self)
+        example_btn.clicked.connect(self.show_pin_input_examples)
+        layout.addWidget(example_btn)
         
         # 텍스트 입력 영역
         text_edit = QPlainTextEdit()
-        text_edit.setPlaceholderText("여기에 PIN을 입력하거나 붙여넣으세요...")
+        text_edit.setPlaceholderText(
+            "여기에 PIN을 입력하거나 붙여넣으세요...\n\n"
+            "예시:\n"
+            "[에그머니-1만원권]\n"
+            "12345-67890-12345-67890\n\n"
+            "[에그머니-5천원]\n"
+            "09876-54321-09876-54321"
+        )
         text_edit.setMinimumHeight(200)
         layout.addWidget(text_edit)
+        
+        # # 텍스트 입력 영역
+        # text_edit = QPlainTextEdit()
+        # text_edit.setPlaceholderText("여기에 PIN을 입력하거나 붙여넣으세요...")
+        # text_edit.setMinimumHeight(200)
+        # layout.addWidget(text_edit)
         
         # 기본 잔액 입력
         balance_layout = QHBoxLayout()
@@ -2166,7 +2185,7 @@ class PinManagerApp(QMainWindow):
         default_balance = QSpinBox()
         default_balance.setRange(1000, 1000000)
         default_balance.setSingleStep(1000)
-        default_balance.setValue(10000)
+        default_balance.setValue(50000)
         balance_layout.addWidget(default_balance)
         
         # 잔액 퀵 선택 버튼들
@@ -2201,7 +2220,270 @@ class PinManagerApp(QMainWindow):
         button_box.accepted.connect(dialog.accept)
         button_box.rejected.connect(dialog.reject)
         layout.addWidget(button_box)
-    
+        
+        # PIN 및 금액 추출 함수
+        def extract_pin_and_amount(line):
+            """다양한 형식에서 PIN과 금액을 추출하는 함수"""
+            line = line.strip()
+            
+            # PIN 형식 검출용 정규식
+            pin_pattern = r'(\d{5}-\d{5}-\d{5}-\d{5})'
+            pin_no_dash = r'(\d{20})'
+            
+            # 금액 감지 정규식 - 다양한 패턴 지원
+            amount_patterns = [
+                # 한글 단위 포함 형식
+                r'\b(\d+)만원\b',                    # 1만원
+                r'\b(\d+)천원\b',                    # 5천원
+                r'\b(\d+)만\s*(\d+)천원\b',          # 1만 5천원
+                r'\b(\d+)만\s*(\d+)백원\b',          # 1만 5백원
+                r'\b(\d+)천\s*(\d+)백원\b',          # 5천 5백원
+                
+                # 에그머니권 형식 ("권" 포함된 패턴)
+                r'\[.*?(\d+)만원권.*?\]',            # [에그머니-1만원권]
+                r'\[.*?(\d+)천원권.*?\]',            # [에그머니-5천원권]
+                r'\(.*?(\d+)만원권.*?\)',            # (에그머니-1만원권)
+                r'\(.*?(\d+)천원권.*?\)',            # (에그머니-5천원권)
+                r'<.*?(\d+)만원권.*?>',              # <에그머니-1만원권>
+                r'<.*?(\d+)천원권.*?>',              # <에그머니-5천원권>
+                
+                # 괄호 형식 (에그머니 설명 포함)
+                r'\[.*?(\d+)만원.*?\]',              # [에그머니-1만원]
+                r'\[.*?(\d+)천원.*?\]',              # [에그머니-5천원]
+                r'\(.*?(\d+)만원.*?\)',              # (에그머니-1만원)
+                r'\(.*?(\d+)천원.*?\)',              # (에그머니-5천원)
+                r'<.*?(\d+)만원.*?>',                # <에그머니-1만원>
+                r'<.*?(\d+)천원.*?>',                # <에그머니-5천원>
+
+                r'\[.*?(\d+)만원*.*?\]',              # [에그머니-1만원]
+                r'\[.*?(\d+)천원*.*?\]',              # [에그머니-5천원]
+                r'\(.*?(\d+)만원*.*?\)',              # (에그머니-1만원)
+                r'\(.*?(\d+)천원*.*?\)',              # (에그머니-5천원)
+                r'<.*?(\d+)만원*.*?>',                # <에그머니-1만원>
+                r'<.*?(\d+)천원*.*?>',                # <에그머니-5천원>
+                
+                # 명확한 금액 표기 패턴
+                r'금액[:\s]*(\d+)[,]?(\d+)?원',      # 금액: 10,000원 또는 금액:10000원
+                r'잔액[:\s]*(\d+)[,]?(\d+)?원',      # 잔액: 10,000원 또는 잔액:10000원
+                r'(\d+)[,]?(\d+)?원권',              # 10,000원권 또는 1만원권
+                
+                # 일반 숫자 형식
+                r'\b(\d+)[,](\d{3})(?:[,](\d{3}))?\b',  # 10,000 또는 1,000,000
+                r'\b(\d+)(?:,000)\b',                 # 10,000 같은 형식
+                r'\b(\d+)k\b',                        # 10k (천 단위)
+                r'\b(\d+)K\b',                        # 10K (천 단위)
+                
+                # 특수 표기법
+                r'1만원권',                           # 1만원권 (숫자 없이 표기)
+                r'5천원권',                           # 5천원권 (숫자 없이 표기)
+                r'3천원권',                           # 3천원권 (숫자 없이 표기)
+                r'1천원권',                           # 1천원권 (숫자 없이 표기)
+                r'만원권',                            # 만원권 (1만원으로 해석)
+                r'천원권',                            # 천원권 (1천원으로 해석)
+                
+                # 원 단위 표기
+                r'\b(\d+)[,]?(\d+)?원\b',            # 10,000원 또는 10000원
+                
+                # 영문 표기
+                r'(\d+)[,]?(\d+)?\s*won',            # 10,000 won 또는 10000won
+                r'(\d+)[.](\d+)[Kk]',                # 10.5K 또는 10.5k
+            ]
+            
+            # 기본값
+            final_pin = None
+            final_amount = default_balance.value()
+            
+            # PIN 추출 시도
+            pin_match = re.search(pin_pattern, line)
+            pin_match2 = re.search(r'(\d{4}-\d{4}-\d{4}-\d{4}-\d{4})', line)
+            if pin_match:
+                final_pin = pin_match.group(1)
+            elif pin_match2:
+                pin_text = pin_match2.group(1).replace("-", "")
+                final_pin = f"{pin_text[:5]}-{pin_text[5:10]}-{pin_text[10:15]}-{pin_text[15:]}"
+            else:
+                # 하이픈 없는 20자리 PIN 찾기 시도
+                pin_no_dash_match = re.search(pin_no_dash, line)
+                if pin_no_dash_match:
+                    pin_text = pin_no_dash_match.group(1)
+                    final_pin = f"{pin_text[:5]}-{pin_text[5:10]}-{pin_text[10:15]}-{pin_text[15:]}"
+            
+            # 금액 추출 시도
+            for pattern in amount_patterns:
+                amount_match = re.search(pattern, line, re.IGNORECASE)
+                if amount_match:
+                    # 특수 패턴 처리
+                    if pattern == r'1만원권' or pattern.endswith('1만원권.*?\\]') or pattern.endswith('1만원권.*?\\)') or pattern.endswith('1만원권.*?>'):
+                        final_amount = 10000
+                        break
+                    elif pattern == r'5천원권' or pattern.endswith('5천원권.*?\\]') or pattern.endswith('5천원권.*?\\)') or pattern.endswith('5천원권.*?>'):
+                        final_amount = 5000
+                        break
+                    elif pattern == r'3천원권' or pattern.endswith('3천원권.*?\\]') or pattern.endswith('3천원권.*?\\)') or pattern.endswith('3천원권.*?>'):
+                        final_amount = 3000
+                        break
+                    elif pattern == r'1천원권' or pattern.endswith('1천원권.*?\\]') or pattern.endswith('1천원권.*?\\)') or pattern.endswith('1천원권.*?>'):
+                        final_amount = 1000
+                        break
+                    elif pattern == r'만원권' or '만원권' in pattern:
+                        # [에그머니-1만원권] 같은 형식에서 숫자 추출
+                        if amount_match.groups() and amount_match.group(1):
+                            final_amount = int(amount_match.group(1)) * 10000
+                        else:
+                            final_amount = 10000  # 숫자 없이 '만원권'만 있을 경우
+                        break
+                    elif pattern == r'천원권' or '천원권' in pattern:
+                        # [에그머니-5천원권] 같은 형식에서 숫자 추출
+                        if amount_match.groups() and amount_match.group(1):
+                            final_amount = int(amount_match.group(1)) * 1000
+                        else:
+                            final_amount = 1000  # 숫자 없이 '천원권'만 있을 경우
+                        break
+                    # 금액 단위에 따라 처리
+                    elif '만원' in pattern and '천원' in pattern:
+                        # 1만 5천원 같은 형식
+                        man = int(amount_match.group(1))
+                        cheon = int(amount_match.group(2))
+                        final_amount = (man * 10000) + (cheon * 1000)
+                        break
+                    elif '만원' in pattern:
+                        final_amount = int(amount_match.group(1)) * 10000
+                        break
+                    elif '천원' in pattern:
+                        final_amount = int(amount_match.group(1)) * 1000
+                        break
+                    elif ',000' in pattern:
+                        final_amount = int(amount_match.group(1)) * 1000
+                        break
+                    elif 'k' in pattern.lower():
+                        # 10k 또는 10.5k 형식
+                        if '.' in pattern:
+                            base = int(amount_match.group(1))
+                            decimal = int(amount_match.group(2))
+                            final_amount = (base * 1000) + (decimal * 100)  # 10.5k -> 10500
+                        else:
+                            final_amount = int(amount_match.group(1)) * 1000
+                        break
+                    elif ',' in pattern and amount_match.lastindex >= 2:
+                        # 10,000 또는 1,000,000 같은 형식
+                        if amount_match.lastindex == 2:
+                            final_amount = int(amount_match.group(1)) * 1000 + int(amount_match.group(2))
+                        elif amount_match.lastindex == 3:
+                            final_amount = int(amount_match.group(1)) * 1000000 + int(amount_match.group(2)) * 1000 + int(amount_match.group(3))
+                        break
+                    elif '원' in pattern:
+                        # 쉼표가 있을 경우 제거
+                        amount_str = amount_match.group(1)
+                        if amount_match.lastindex > 1 and amount_match.group(2):
+                            amount_str += amount_match.group(2)
+                        final_amount = int(amount_str)
+                        break
+                    elif 'won' in pattern.lower():
+                        # 10,000 won 형식
+                        amount_str = amount_match.group(1)
+                        if amount_match.lastindex > 1 and amount_match.group(2):
+                            amount_str += amount_match.group(2)
+                        final_amount = int(amount_str)
+                        break
+
+            # 금액이 인식되지 않았고, 텍스트에 "만원권"이 포함된 경우 처리
+            if final_amount == default_balance.value():
+                if "만원권" in line:
+                    # 숫자 추출 시도
+                    amount_match = re.search(r'(\d+)만원권', line)
+                    if amount_match:
+                        final_amount = int(amount_match.group(1)) * 10000
+                    else:
+                        final_amount = 10000  # 기본값
+                elif "천원권" in line:
+                    # 숫자 추출 시도
+                    amount_match = re.search(r'(\d+)천원권', line)
+                    if amount_match:
+                        final_amount = int(amount_match.group(1)) * 1000
+                    else:
+                        final_amount = 1000  # 기본값
+            
+            # 특수 케이스: "[에그머니-1만원권]" 형식 최종 확인
+            if "[에그머니" in line or "(에그머니" in line or "<에그머니" in line:
+                if "만원권" in line:
+                    # 특수 패턴에서 숫자 추출
+                    special_match = re.search(r'[-\s](\d+)만원권', line)
+                    if special_match:
+                        final_amount = int(special_match.group(1)) * 10000
+                    else:
+                        final_amount = 10000  # 기본값
+                elif "천원권" in line:
+                    # 특수 패턴에서 숫자 추출
+                    special_match = re.search(r'[-\s](\d+)천원권', line)
+                    if special_match:
+                        final_amount = int(special_match.group(1)) * 1000
+                    else:
+                        final_amount = 1000  # 기본값
+            
+            # 쉼표로 구분된 PIN,금액 형식도 처리
+            if ',' in line and not final_pin:
+                parts = line.split(',', 1)
+                pin_text = parts[0].strip()
+                
+                # PIN 형식 확인
+                if re.match(r'^\d{5}-\d{5}-\d{5}-\d{5}$', pin_text):
+                    final_pin = pin_text
+                elif re.match(r'^\d{4}-\d{4}-\d{4}-\d{4}-\d{4}$', pin_text):
+                    pin_text = pin_text.replace("-", "")
+                    final_pin = f"{pin_text[:5]}-{pin_text[5:10]}-{pin_text[10:15]}-{pin_text[15:]}"
+                elif re.match(r'^\d{20}$', pin_text):
+                    final_pin = f"{pin_text[:5]}-{pin_text[5:10]}-{pin_text[10:15]}-{pin_text[15:]}"
+                
+                # 두 번째 부분이 금액인지 확인
+                if len(parts) > 1:
+                    try:
+                        # 금액 부분에서 '원', '万', '千' 등의 단위 제거
+                        amount_part = parts[1].strip()
+                        amount_part = re.sub(r'[^\d,.]', '', amount_part)
+                        amount_str = amount_part.replace(',', '')
+                        if amount_str.isdigit():
+                            final_amount = int(amount_str)
+                    except:
+                        pass
+            
+            # 공백으로 구분된 PIN 금액 형식도 처리
+            if ' ' in line and not final_pin:
+                parts = line.split()
+                pin_text = parts[0].strip()
+                
+                # PIN 형식 확인
+                if re.match(r'^\d{5}-\d{5}-\d{5}-\d{5}$', pin_text):
+                    final_pin = pin_text
+                elif re.match(r'^\d{4}-\d{4}-\d{4}-\d{4}-\d{4}$', pin_text):
+                    pin_text = pin_text.replace("-", "")
+                    final_pin = f"{pin_text[:5]}-{pin_text[5:10]}-{pin_text[10:15]}-{pin_text[15:]}"
+                elif re.match(r'^\d{20}$', pin_text):
+                    final_pin = f"{pin_text[:5]}-{pin_text[5:10]}-{pin_text[10:15]}-{pin_text[15:]}"
+                
+                # 마지막 부분이 숫자인지 확인
+                if len(parts) > 1:
+                    try:
+                        last_part = parts[-1]
+                        # 만원, 천원 등의 표현 처리
+                        if '만원' in last_part:
+                            man_match = re.search(r'(\d+)만원', last_part)
+                            if man_match:
+                                final_amount = int(man_match.group(1)) * 10000
+                        elif '천원' in last_part:
+                            cheon_match = re.search(r'(\d+)천원', last_part)
+                            if cheon_match:
+                                final_amount = int(cheon_match.group(1)) * 1000
+                        # 일반 숫자 처리
+                        elif re.match(r'^\d+$', last_part):
+                            final_amount = int(last_part)
+                        # 쉼표 포함 숫자 처리
+                        elif re.match(r'^\d+,\d+$', last_part):
+                            final_amount = int(last_part.replace(',', ''))
+                    except:
+                        pass
+            
+            return final_pin, final_amount
+        
         # PIN 검증 및 미리보기 함수
         def parse_and_preview():
             text = text_edit.toPlainText().strip()
@@ -2209,59 +2491,84 @@ class PinManagerApp(QMainWindow):
                 preview_table.setRowCount(0)
                 return
             
-            lines = text.splitlines()
+            # 전처리: 빈 줄 제거 및 연속된 공백 제거
+            normalized_text = '\n'.join([line.strip() for line in text.splitlines() if line.strip()])
+            
+            # [에그머니-...] 형식 처리를 위한 개선
+            # 전체 텍스트 분석으로 개행 문제 해결
+            pins_with_amounts = []
+            
+            # 방법 1: 각 줄마다 처리 시도
+            lines = normalized_text.splitlines()
+            i = 0
+            while i < len(lines):
+                current_line = lines[i]
+                
+                # PIN과 금액 추출 시도
+                pin, amount = extract_pin_and_amount(current_line)
+                
+                # PIN이 있는 경우: 바로 추가
+                if pin:
+                    pins_with_amounts.append((pin, amount, current_line))
+                # PIN이 없는 경우: 다음 줄과 합쳐서 시도
+                elif i + 1 < len(lines):
+                    combined_line = current_line + ' ' + lines[i + 1]
+                    pin, amount = extract_pin_and_amount(combined_line)
+                    if pin:
+                        pins_with_amounts.append((pin, amount, combined_line))
+                        i += 1  # 다음 줄도 처리했으므로 인덱스 추가 증가
+                
+                i += 1
+            
+            # 방법 2: 전체 텍스트에서 PIN 패턴 찾기 시도
+            if not pins_with_amounts:
+                pin_pattern = r'(\d{5}-\d{5}-\d{5}-\d{5})'
+                pin_no_dash = r'(\d{20})'
+                
+                # 하이픈이 있는 PIN 찾기
+                for match in re.finditer(pin_pattern, normalized_text):
+                    pin = match.group(1)
+                    
+                    # PIN 주변 50자 내의 컨텍스트에서 금액 찾기
+                    start_pos = max(0, match.start() - 50)
+                    end_pos = min(len(normalized_text), match.end() + 50)
+                    context = normalized_text[start_pos:end_pos]
+                    
+                    _, amount = extract_pin_and_amount(context)
+                    pins_with_amounts.append((pin, amount, context))
+                
+                # 하이픈 없는 20자리 숫자 찾기
+                for match in re.finditer(pin_no_dash, normalized_text):
+                    pin_text = match.group(1)
+                    pin = f"{pin_text[:5]}-{pin_text[5:10]}-{pin_text[10:15]}-{pin_text[15:]}"
+                    
+                    # PIN 주변 50자 내의 컨텍스트에서 금액 찾기
+                    start_pos = max(0, match.start() - 50)
+                    end_pos = min(len(normalized_text), match.end() + 50)
+                    context = normalized_text[start_pos:end_pos]
+                    
+                    _, amount = extract_pin_and_amount(context)
+                    pins_with_amounts.append((pin, amount, context))
+            
+            # 중복 제거 (같은 PIN은 한 번만 처리)
+            unique_pins = {}
+            for pin, amount, context in pins_with_amounts:
+                if pin not in unique_pins:
+                    unique_pins[pin] = (amount, context)
+            
+            # 테이블 표시용 데이터 준비
             parsed_pins = []
             
-            for line in lines:
-                line = line.strip()
-                if not line:  # 빈 줄 무시
-                    continue
-                    
-                # PIN과 잔액 분리 (PIN,잔액 또는 PIN 잔액 형식)
-                pin_balance = None
-                
-                # 쉼표로 구분된 형식 (PIN,잔액)
-                if ',' in line:
-                    parts = line.split(',', 1)
-                    pin_text = parts[0].strip()
-                    try:
-                        pin_balance = int(parts[1].strip().replace(',', ''))
-                    except:
-                        pin_balance = default_balance.value()
-                        
-                # 공백으로 구분된 형식 (PIN 잔액)
-                elif ' ' in line:
-                    parts = line.split()
-                    pin_text = parts[0].strip()
-                    # 마지막 부분이 숫자인지 확인
-                    try:
-                        pin_balance = int(parts[-1].replace(',', ''))
-                        # PIN 부분만 남기기
-                        pin_text = ' '.join(parts[:-1])
-                    except:
-                        pin_balance = default_balance.value()
-                else:
-                    pin_text = line
-                    pin_balance = default_balance.value()
-                
-                # PIN 형식 정리 및 확인
-                pin_text = pin_text.replace(" ", "").replace("\t", "")
-                
-                # PIN이 숫자만 포함된 20자리인 경우 형식 추가
-                if pin_text.isdigit() and len(pin_text) == 20:
-                    formatted_pin = f"{pin_text[:5]}-{pin_text[5:10]}-{pin_text[10:15]}-{pin_text[15:]}"
-                else:
-                    formatted_pin = pin_text
-                    
+            for pin, (amount, context) in unique_pins.items():
                 # PIN 형식 확인
-                is_valid = bool(re.match(r'^\d{5}-\d{5}-\d{5}-\d{5}$', formatted_pin))
+                is_valid = bool(re.match(r'^\d{5}-\d{5}-\d{5}-\d{5}$', pin))
                 
                 # 중복 확인
-                is_duplicate = formatted_pin in [p[0] for p in parsed_pins]
+                is_duplicate = pin in [p[0] for p in parsed_pins]
                 exists_in_manager = False
                 
                 if is_valid and not is_duplicate:
-                    exists_in_manager = (formatted_pin in self.manager.pins)
+                    exists_in_manager = (pin in self.manager.pins)
                 
                 # 상태 결정
                 if not is_valid:
@@ -2278,20 +2585,20 @@ class PinManagerApp(QMainWindow):
                     status_color = QColor(0, 128, 0)  # 초록색
                     
                 # 결과 추가
-                parsed_pins.append((formatted_pin, pin_balance, status, status_color, is_valid and not is_duplicate and not exists_in_manager))
+                parsed_pins.append((pin, amount, status, status_color, is_valid and not is_duplicate and not exists_in_manager))
             
             # 테이블에 결과 표시
             preview_table.setRowCount(len(parsed_pins))
-            for row, (pin, balance, status, color, _) in enumerate(parsed_pins):
+            for row, (pin, amount, status, color, _) in enumerate(parsed_pins):
                 pin_item = QTableWidgetItem(pin)
-                balance_item = QTableWidgetItem(f"{balance:,}")
+                amount_item = QTableWidgetItem(f"{amount:,}")
                 status_item = QTableWidgetItem(status)
                 
                 pin_item.setForeground(color)
                 status_item.setForeground(color)
                 
                 preview_table.setItem(row, 0, pin_item)
-                preview_table.setItem(row, 1, balance_item)
+                preview_table.setItem(row, 1, amount_item)
                 preview_table.setItem(row, 2, status_item)
         
         # 미리보기 버튼 클릭 시 PIN 검증 및 미리보기 수행
@@ -2312,63 +2619,70 @@ class PinManagerApp(QMainWindow):
             duplicated_count = 0
             
             for line in lines:
-                line = line.strip()
-                if not line:  # 빈 줄 무시
+                if not line.strip():  # 빈 줄 무시
                     continue
                     
-                # PIN과 잔액 분리
-                pin_balance = None
+                pin, amount = extract_pin_and_amount(line)
                 
-                # 쉼표로 구분된 형식 (PIN,잔액)
-                if ',' in line:
-                    parts = line.split(',', 1)
-                    pin_text = parts[0].strip()
-                    try:
-                        pin_balance = int(parts[1].strip().replace(',', ''))
-                    except:
-                        pin_balance = default_balance.value()
-                        
-                # 공백으로 구분된 형식 (PIN 잔액)
-                elif ' ' in line:
-                    parts = line.split()
-                    pin_text = parts[0].strip()
-                    # 마지막 부분이 숫자인지 확인
-                    try:
-                        pin_balance = int(parts[-1].replace(',', ''))
-                        # PIN 부분만 남기기
-                        pin_text = ' '.join(parts[:-1])
-                    except:
-                        pin_balance = default_balance.value()
-                else:
-                    pin_text = line
-                    pin_balance = default_balance.value()
-                
-                # PIN 형식 정리 및 확인
-                pin_text = pin_text.replace(" ", "").replace("\t", "")
-                
-                # PIN이 숫자만 포함된 20자리인 경우 형식 추가
-                if pin_text.isdigit() and len(pin_text) == 20:
-                    formatted_pin = f"{pin_text[:5]}-{pin_text[5:10]}-{pin_text[10:15]}-{pin_text[15:]}"
-                else:
-                    formatted_pin = pin_text
+                if not pin:
+                    skipped_count += 1
+                    continue
                 
                 # PIN 형식 및 중복 확인
-                if not self.manager.is_valid_pin_format(formatted_pin):
+                if not self.manager.is_valid_pin_format(pin):
                     skipped_count += 1
                     continue
                     
-                if formatted_pin in self.manager.pins:
+                if pin in self.manager.pins:
                     duplicated_count += 1
                     continue
                     
                 # PIN 추가
-                self.manager.add_pin(formatted_pin, pin_balance)
+                self.manager.add_pin(pin, amount)
                 added_count += 1
             
             # 결과 메시지 및 UI 업데이트
-            message = f"추가: {added_count}개\n중복: {duplicated_count}개\n형식 오류: {skipped_count}개"
+            message = f"추가: {added_count}개\n중복: {duplicated_count}개\n형식 오류 또는 건너뜀: {skipped_count}개"
             QMessageBox.information(self, "PIN 일괄 추가 결과", message)
             self.update_table()
+    
+    def show_pin_input_examples(self):
+        """PIN 입력 예시 다이얼로그 표시"""
+        examples = QDialog(self)
+        examples.setWindowTitle("PIN 입력 예시")
+        examples.setMinimumWidth(400)
+        
+        layout = QVBoxLayout(examples)
+        
+        # 예시 텍스트
+        example_text = (
+            "1. 기본 PIN 형식:\n"
+            "12345-67890-12345-67890\n\n"
+            
+            "2. 숫자만 입력:\n"
+            "1234567890123456789\n\n"
+            
+            "3. 문자 표기법:\n"
+            "[에그머니-1만원권]\n"
+            "12345-67890-12345-67890\n\n"
+            
+            "4. 금액 표기법:\n"
+            "PIN: 12345-67890-12345-67890, 금액: 10,000원\n\n"
+            
+            "5. 여러 형식 자동 인식:\n"
+            "[5천원권] 12345-67890-12345-67890\n"
+            "1만원 09876-54321-09876-54321\n"
+        )
+        
+        example_label = QLabel(example_text)
+        layout.addWidget(example_label)
+        
+        # 닫기 버튼
+        close_btn = QPushButton("닫기")
+        close_btn.clicked.connect(examples.close)
+        layout.addWidget(close_btn)
+        
+        examples.exec()
 
 if __name__ == "__main__":
     config_read()
