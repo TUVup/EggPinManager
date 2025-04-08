@@ -25,7 +25,7 @@ import shutil
 import subprocess
 import tempfile
 
-current_version = "1.2.5"
+current_version = "1.2.6"
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
@@ -1749,14 +1749,18 @@ class PinManagerApp(QMainWindow):
             self.add_pin_input_box(len(pins_to_inject))
 
             # 5️⃣ 핀번호들 자바스크립트를 통해 입력
-            self.inject_pin_codes(pins_to_inject)
+            result = self.inject_pin_codes(pins_to_inject)
+            if not result:
+                return "❌ PIN 입력에 실패했습니다.\n PIN 입력이 완료되지 않았습니다."
 
             # 모두 동의
             self.click_all_agree()
 
+            # 다음 버튼
+            self.submit()
+
             # 제출
             if config['SETTING']['auto_submit'] == 'True':
-                self.submit()
                 time.sleep(1.2)
                 self.final_submit()
 
@@ -1843,14 +1847,18 @@ class PinManagerApp(QMainWindow):
             self.add_pin_input_box(len(pins_to_inject))
 
             # 5️⃣ 핀번호들 자바스크립트를 통해 입력
-            self.inject_pin_codes(pins_to_inject)
+            result = self.inject_pin_codes(pins_to_inject)
+            if not result:
+                return "❌ PIN 입력에 실패했습니다.\n PIN 입력이 완료되지 않았습니다."
 
             # 모두 동의
             self.click_all_agree()
 
+            # 다음 버튼
+            self.submit()
+
             # 제출
             if config['SETTING']['auto_submit'] == 'True':
-                self.submit()
                 time.sleep(1.2)  # 제출 후 잠시 대기
                 self.final_submit()
 
@@ -1948,43 +1956,210 @@ class PinManagerApp(QMainWindow):
             return False
 
     def find_amount(self):
-        javascript_code = '''copy(document.evaluate('//*[@id="header"]/div/dl[2]/dd/strong', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.innerText);'''
-        self.paste_javascript_code(javascript_code)
-        time.sleep(0.2)
-
-        # 클립보드에서 금액 가져오기 (pyperclip 사용)
-        amount_text = pyperclip.paste()
-
-        # 디버깅을 위한 출력
-        # print(f"클립보드에서 가져온 텍스트: '{amount_text}'")
-        
+        """금액을 추출하는 향상된 함수"""
         try:
-            # 쉼표와 공백 제거
-            amount_text = amount_text.replace(" ", "").replace(",", "")
+            # 다양한 XPath 쿼리 시도
+            javascript_code_options = [
+                # 기존 쿼리
+                '''
+                try {
+                    const amountElement = document.evaluate('//*[@id="header"]/div/dl[2]/dd/strong', 
+                        document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                    if (amountElement) {
+                        copy(amountElement.innerText);
+                        console.log("금액 추출 성공(경로1): " + amountElement.innerText);
+                    } else {
+                        throw new Error("경로1 실패");
+                    }
+                } catch(e) {
+                    console.log("경로1 오류: " + e);
+                    // 대체 쿼리: 금액을 포함한 모든 strong 태그 찾기 
+                    const strongElements = document.querySelectorAll('strong');
+                    let amountText = "";
+                    
+                    for (const elem of strongElements) {
+                        if (elem.innerText.includes('원')) {
+                            amountText = elem.innerText;
+                            console.log("금액 추출 성공(대체): " + amountText);
+                            copy(amountText);
+                            break;
+                        }
+                    }
+                    
+                    if (!amountText) {
+                        // 마지막 시도: 페이지 전체 텍스트에서 금액 패턴 추출
+                        const regex = /[\d,]+원/g;
+                        const pageText = document.body.innerText;
+                        const matches = pageText.match(regex);
+                        
+                        if (matches && matches.length > 0) {
+                            amountText = matches[0];
+                            console.log("금액 추출 성공(패턴): " + amountText);
+                            copy(amountText);
+                        } else {
+                            copy("금액 추출 실패");
+                        }
+                    }
+                }
+                '''
+            ]
             
-            # 숫자만 추출 (텍스트에서 '원' 등의 단위가 포함될 경우)
-            amount_text = re.sub(r'[^\d]', '', amount_text)
+            # 각 쿼리 시도
+            amount_text = None
+            for code in javascript_code_options:
+                self.paste_javascript_code(code)
+                time.sleep(0.3)  # 시간 약간 증가
+                
+                # 클립보드에서 결과 확인
+                clipboard_text = pyperclip.paste()
+                print(f"클립보드 텍스트: '{clipboard_text}'")
+                
+                # 유효한 결과인지 확인
+                if clipboard_text and clipboard_text != "금액 추출 실패":
+                    amount_text = clipboard_text
+                    break
             
-            # 정수로 변환
-            return int(amount_text)
-        except ValueError as e:
-            # 변환 실패 시 예외 처리
-            QMessageBox.warning(self, "금액 감지 실패", f"금액을 가져오는데 실패했습니다.\n{amount_text}\n수동으로 금액을 입력해주세요.")
-            amount, ok = QInputDialog.getInt(self, "금액 수동 입력", "사용할 금액:", 0, 0, 1000000, 1000)
+            # 결과 추출 실패 시 사용자에게 직접 물어보기
+            if not amount_text or "추출 실패" in amount_text:
+                QMessageBox.warning(self, "금액 감지 실패", 
+                    "자동으로 금액을 감지하지 못했습니다.\n수동으로 금액을 입력해주세요.")
+                amount, ok = QInputDialog.getInt(self, "금액 수동 입력", "사용할 금액:", 
+                                                10000, 0, 1000000, 1000)
+                if ok:
+                    return amount
+                raise ValueError("금액 입력이 취소되었습니다.")
+            
+            # 금액 텍스트 처리
+            # 숫자만 추출 (쉼표, 원, 공백 제거)
+            digits_only = re.sub(r'[^\d]', '', amount_text)
+            
+            # 추출된 숫자가 없거나 너무 작은 경우 (의심스러운 결과)
+            if not digits_only or int(digits_only) < 100:
+                # 사용자에게 확인
+                confirm = QMessageBox.question(self, "금액 확인", 
+                    f"감지된 금액이 {digits_only}원입니다. 정확한가요?",
+                    QMessageBox.Yes | QMessageBox.No)
+                    
+                if confirm == QMessageBox.No:
+                    # 수동 입력 요청
+                    amount, ok = QInputDialog.getInt(self, "금액 수동 입력", 
+                        "정확한 금액을 입력해주세요:", 10000, 0, 1000000, 1000)
+                    if ok:
+                        return amount
+                    raise ValueError("금액 입력이 취소되었습니다.")
+            
+            # 최종 금액 리턴
+            return int(digits_only)
+        
+        except Exception as e:
+            # 오류 상세 출력 및 사용자에게 알림
+            error_msg = f"금액을 감지하는 중 오류가 발생했습니다: {str(e)}"
+            print(error_msg)
+            QMessageBox.warning(self, "금액 감지 오류", error_msg + "\n수동으로 금액을 입력해주세요.")
+            
+            # 사용자 입력 요청
+            amount, ok = QInputDialog.getInt(self, "금액 수동 입력", 
+                "사용할 금액:", 10000, 0, 1000000, 1000)
             if ok:
                 return amount
             else:
                 raise ValueError("금액 입력이 취소되었습니다.")
-    
+
     def find_Product(self):
-        javascript_code = '''copy(document.evaluate('//*[@id="header"]/div/dl[1]/dd', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.innerText);
-'''
-        self.paste_javascript_code(javascript_code)
-        time.sleep(0.2)
-        name = pyperclip.paste()
-        if not name:
-            return "알 수 없는 상품"
-        return name
+        """상품명을 자동으로 추출하는 향상된 함수"""
+        try:
+            # 다양한 방법으로 상품명 추출 시도
+            javascript_code_options = [
+                # 기본 XPath 쿼리
+                '''
+                try {
+                    const nameElement = document.evaluate('//*[@id="header"]/div/dl[1]/dd', 
+                        document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                    if (nameElement) {
+                        copy(nameElement.innerText);
+                        console.log("상품명 추출 성공(경로1): " + nameElement.innerText);
+                    } else {
+                        throw new Error("경로1 실패");
+                    }
+                } catch(e) {
+                    console.log("경로1 오류: " + e);
+                    
+                    // 대체 방법 1: 제목에서 추출
+                    try {
+                        const titleElement = document.querySelector("h1, h2, .title, #title");
+                        if (titleElement) {
+                            copy(titleElement.innerText);
+                            console.log("상품명 추출 성공(제목): " + titleElement.innerText);
+                        } else {
+                            throw new Error("제목 요소 찾기 실패");
+                        }
+                    } catch (e2) {
+                        console.log("제목 추출 오류: " + e2);
+                        
+                        // 대체 방법 2: 페이지 제목에서 추출
+                        try {
+                            const pageTitle = document.title.replace("- LOST ARK", "").replace("- 로스트아크", "").trim();
+                            if (pageTitle) {
+                                copy(pageTitle);
+                                console.log("상품명 추출 성공(페이지 제목): " + pageTitle);
+                            } else {
+                                throw new Error("페이지 제목 추출 실패");
+                            }
+                        } catch (e3) {
+                            console.log("페이지 제목 추출 오류: " + e3);
+                            
+                            // 대체 방법 3: 패키지 또는 상품 관련 텍스트 검색 (수정된 부분)
+                            const textContent = document.body.innerText;
+                            const packageMatch = textContent.match(/(?:패키지|에그머니|아이템|상품)[^\\n\\r.]*?[0-9]+[^\\n\\r.]*/);
+                            if (packageMatch) {
+                                copy(packageMatch[0]);
+                                console.log("상품명 추출 성공(텍스트 패턴): " + packageMatch[0]);
+                            } else {
+                                copy("상품명 추출 실패");
+                            }
+                        }
+                    }
+                }
+                '''
+            ]
+            
+            # 각 방법 순차적으로 시도
+            product_name = None
+            for code in javascript_code_options:
+                self.paste_javascript_code(code)
+                time.sleep(0.3)
+                
+                # 클립보드에서 결과 확인
+                clipboard_text = pyperclip.paste()
+                print(f"클립보드 상품명: '{clipboard_text}'")
+                
+                # 유효한 결과인지 확인
+                if clipboard_text and clipboard_text != "상품명 추출 실패" and "document.evaluate" not in clipboard_text:
+                    product_name = clipboard_text
+                    break
+            
+            # 결과 추출 실패 또는 비정상적인 결과 처리
+            if not product_name or "추출 실패" in product_name or len(product_name) > 50 or "document.evaluate" in product_name:
+                # 기본값 사용
+                return "에그머니 자동 충전"
+            
+            # 상품명 정리 및 검증
+            product_name = product_name.strip()
+            
+            # 너무 긴 상품명 줄이기
+            if len(product_name) > 50:
+                product_name = product_name[:47] + "..."
+            
+            # JS 코드가 그대로 복사된 경우 감지
+            if "document.evaluate" in product_name or "copy(" in product_name:
+                return "에그머니 자동 충전"
+            
+            return product_name
+        
+        except Exception as e:
+            # 오류 발생 시 안전한 기본값 반환
+            print(f"상품명 추출 오류: {str(e)}")
+            return "에그머니 자동 충전"
     
     # 핀을 입력할 박스를 추가하는 기능
     def add_pin_input_box(self, num):
@@ -1997,25 +2172,79 @@ class PinManagerApp(QMainWindow):
                 PinBoxInsert('pyo_cnt');
         '''
         self.paste_javascript_code(javascript_code)
-    
-    # javascript 코드를 붙여넣는 기능
-    def inject_pin_codes(self, pins: list[str]):
-        if pins is None or len(pins) == 0:
-            return "사용되는 핀이 없습니다."
 
-        arr = [item for pin in pins for item in pin.split("-")]
-        arr_text = f"['{"', '".join(arr)}']"
-        # 5️⃣ 자바스크립트 코드 준비
-        javascript_code = '''
-            let i = 0;
-            arr = arr_text;
-            document.querySelectorAll("#pinno").forEach(obj => {
-                obj.querySelectorAll("input").forEach(input => {
-                    input.value = arr[i++];
-                })
-            })
-        '''.replace("arr_text", arr_text)
-        self.paste_javascript_code(javascript_code)
+    def inject_pin_codes(self, pins: list[str]):
+        """핀 코드를 입력 필드에 삽입합니다 (향상된 오류 처리)"""
+        try:
+            # 입력 유효성 검사
+            if pins is None or len(pins) == 0:
+                print("오류: 입력할 PIN이 없습니다.")
+                return False
+                
+            if len(pins) > 5:
+                print(f"경고: 최대 5개의 PIN만 지원합니다. {len(pins)}개 중 첫 5개만 사용됩니다.")
+                pins = pins[:5]  # 최대 5개로 제한
+
+            # 핀 입력용 배열 생성
+            arr = [item for pin in pins for item in pin.split("-")]
+            arr_text = f"['{"', '".join(arr)}']"
+            
+            # 자바스크립트 코드 준비 (오류 처리 포함)
+            javascript_code = '''
+            try {
+                let i = 0;
+                let arr = ARRAY_PLACEHOLDER;
+                let pinContainers = document.querySelectorAll("#pinno");
+                
+                if (pinContainers.length === 0) {
+                    throw new Error("PIN 입력 필드를 찾을 수 없습니다");
+                }
+                
+                // 각 PIN 컨테이너 처리
+                pinContainers.forEach((container, containerIndex) => {
+                    // 컨테이너 인덱스가 PIN 수보다 작은 경우에만 처리
+                    if (containerIndex < PINS_COUNT) {
+                        const inputs = container.querySelectorAll("input");
+                        if (inputs.length === 0) {
+                            console.error(`컨테이너 #${containerIndex}에서 입력 필드를 찾을 수 없습니다`);
+                            return;
+                        }
+                        
+                        // 각 입력 필드에 값 입력
+                        inputs.forEach(input => {
+                            if (i < arr.length) {
+                                input.value = arr[i++];
+                                // 이벤트 발생으로 값 변경 감지
+                                const event = new Event('input', { bubbles: true });
+                                input.dispatchEvent(event);
+                            }
+                        });
+                    }
+                });
+                
+                console.log("PIN 입력 완료: " + PINS_COUNT + "개");
+                copy("PIN 입력 성공");
+            } catch (error) {
+                console.error("PIN 입력 오류: " + error.message);
+                copy("PIN 입력 실패: " + error.message);
+            }
+            '''.replace("ARRAY_PLACEHOLDER", arr_text).replace("PINS_COUNT", str(len(pins)))
+            
+            # 스크립트 실행
+            self.paste_javascript_code(javascript_code)
+            
+            # 결과 확인
+            result = pyperclip.paste()
+            if "PIN 입력 성공" in result:
+                print(f"✅ PIN {len(pins)}개 입력 완료")
+                return True
+            else:
+                print(f"❌ PIN 입력 실패: {result}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ PIN 입력 중 오류 발생: {str(e)}")
+            return False
     
     # javascript 코드를 붙여넣는 기능
     def paste_javascript_code(self, javascript_code):
