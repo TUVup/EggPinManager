@@ -76,5 +76,5 @@
 
 실행파일 빌드
 - ```
-  pyinstaller -w -F --uac-admin -i="eggui.ico" --name=EggManager --add-data="resource;resource/" EggManager_GUI.py
+  python setup.py build_exe
   ```
