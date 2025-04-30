@@ -25,7 +25,7 @@ import shutil
 import subprocess
 import tempfile
 
-current_version = "1.2.6"
+current_version = "1.2.7"  # 현재 버전
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
@@ -349,10 +349,10 @@ class AutoUpdater:
         
         with open(script_path, 'w', encoding='utf-8') as f:
             f.write("@echo off\n")
-            f.write("color 0A\n")  # 검정 바탕에 녹색 글자로 설정
+            f.write("color 06\n")  # 검정 바탕에 주황색 글자로 설정
             f.write("title EggManager 업데이트 진행 중...\n")
             f.write("mode con: cols=80 lines=30\n")  # 콘솔 창 크기 설정
-            f.write("powershell -command \"$host.UI.RawUI.WindowTitle = 'EggManager 업데이트 진행 중...'\"\n")
+            # f.write("powershell -command \"$host.UI.RawUI.WindowTitle = 'EggManager 업데이트 진행 중...'\"\n")
             
             # 화면 지우기 및 헤더 표시
             f.write("cls\n")
@@ -1089,6 +1089,10 @@ class PinManagerApp(QMainWindow):
         layout.addWidget(QLabel(f"EggManager v{current_version}"))
         layout.addWidget(QLabel("개발자: TUVup"))
         layout.addWidget(QLabel("이 프로그램은 에그머니 PIN 관리를 위한 도구입니다."))
+        link_label = QLabel("링크: <a href = https://arca.live/b/gilrsfrontline2exili/126421111>설명서</a>")
+        link_label.setOpenExternalLinks(True)
+        link_label.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
+        layout.addWidget(link_label)
         button_box = QDialogButtonBox(QDialogButtonBox.Ok)
         button_box.accepted.connect(about_dialog.accept)
         layout.addWidget(button_box)
@@ -1136,7 +1140,7 @@ class PinManagerApp(QMainWindow):
         if input_dialog.exec() == QDialog.Accepted:
             return amount_input.value(), True
         return None, False
-    
+
     def show_usage_statistics(self):
         """PIN 사용 통계를 표시합니다."""
         try:
@@ -1954,6 +1958,21 @@ class PinManagerApp(QMainWindow):
         except Exception as e:
             self.show_warning_with_copy("로그 저장 오류", f"로그를 저장하는 중 오류가 발생했습니다: {str(e)}")
             return False
+        
+    def webview_rise(self):
+        # 1️⃣ HAOPLAY 창 핸들 찾기
+        haoplay_hwnd = user32.FindWindowW(None, "HAOPLAY")
+        if not haoplay_hwnd:
+            return "❌ HAOPLAY 창을 찾을 수 없습니다."
+
+        # 2️⃣ "Chrome_WidgetWin_0" 컨트롤 핸들 찾기 (웹뷰 컨트롤)
+        webview_hwnd = user32.FindWindowExW(haoplay_hwnd, 0, "Chrome_WidgetWin_0", None)
+        if not webview_hwnd:
+            return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
+
+        # 3️⃣ 창 활성화 (child_hWnd로 변경)
+        user32.SetForegroundWindow(webview_hwnd)  # 웹뷰 컨트롤을 최상위로 활성화
+        time.sleep(0.5)  # 안정성을 위해 대기
 
     def find_amount(self):
         """금액을 추출하는 향상된 함수"""
@@ -2008,7 +2027,7 @@ class PinManagerApp(QMainWindow):
             amount_text = None
             for code in javascript_code_options:
                 self.paste_javascript_code(code)
-                time.sleep(0.3)  # 시간 약간 증가
+                time.sleep(0.5)  # 시간 약간 증가
                 
                 # 클립보드에서 결과 확인
                 clipboard_text = pyperclip.paste()
@@ -2024,17 +2043,21 @@ class PinManagerApp(QMainWindow):
                 QMessageBox.warning(self, "금액 감지 실패", 
                     "자동으로 금액을 감지하지 못했습니다.\n수동으로 금액을 입력해주세요.")
                 amount, ok = QInputDialog.getInt(self, "금액 수동 입력", "사용할 금액:", 
-                                                10000, 0, 1000000, 1000)
+                                                0, 0, 1000000, 1000)
                 if ok:
+                    self.webview_rise()
+                    pyautogui.hotkey('ctrl', 'shift', 'j')
+                    time.sleep(0.2)
                     return amount
-                raise ValueError("금액 입력이 취소되었습니다.")
+                else:
+                    raise ValueError("금액 입력이 취소되었습니다.")
             
             # 금액 텍스트 처리
             # 숫자만 추출 (쉼표, 원, 공백 제거)
             digits_only = re.sub(r'[^\d]', '', amount_text)
             
             # 추출된 숫자가 없거나 너무 작은 경우 (의심스러운 결과)
-            if not digits_only or int(digits_only) < 100:
+            if not digits_only or int(digits_only) < 1000:
                 # 사용자에게 확인
                 confirm = QMessageBox.question(self, "금액 확인", 
                     f"감지된 금액이 {digits_only}원입니다. 정확한가요?",
@@ -2043,13 +2066,20 @@ class PinManagerApp(QMainWindow):
                 if confirm == QMessageBox.No:
                     # 수동 입력 요청
                     amount, ok = QInputDialog.getInt(self, "금액 수동 입력", 
-                        "정확한 금액을 입력해주세요:", 10000, 0, 1000000, 1000)
+                        "정확한 금액을 입력해주세요:", 0, 0, 1000000, 1000)
                     if ok:
+                        self.webview_rise()
+                        pyautogui.hotkey('ctrl', 'shift', 'j')
+                        time.sleep(0.2)
                         return amount
-                    raise ValueError("금액 입력이 취소되었습니다.")
+                    else:
+                        raise ValueError("금액 입력이 취소되었습니다.")
             
             # 최종 금액 리턴
             return int(digits_only)
+        
+        except ValueError as ve:
+            raise ve
         
         except Exception as e:
             # 오류 상세 출력 및 사용자에게 알림
@@ -2059,8 +2089,11 @@ class PinManagerApp(QMainWindow):
             
             # 사용자 입력 요청
             amount, ok = QInputDialog.getInt(self, "금액 수동 입력", 
-                "사용할 금액:", 10000, 0, 1000000, 1000)
+                "사용할 금액:", 0, 0, 1000000, 1000)
             if ok:
+                self.webview_rise()
+                pyautogui.hotkey('ctrl', 'shift', 'j')
+                time.sleep(0.2)
                 return amount
             else:
                 raise ValueError("금액 입력이 취소되었습니다.")
@@ -2232,6 +2265,7 @@ class PinManagerApp(QMainWindow):
             
             # 스크립트 실행
             self.paste_javascript_code(javascript_code)
+            time.sleep(0.3)
             
             # 결과 확인
             result = pyperclip.paste()
@@ -2694,7 +2728,9 @@ class PinManagerApp(QMainWindow):
             "4. 여러 PIN 형식:\n"
             "[에그머니 1천원권]\n"
             "12345-67890-12345-67890\n"
-            "09876-54321-09876-54321"
+            "09876-54321-09876-54321\n\n"
+
+            "5. G마켓 형식 포함(4-4-4-4-4)"
         )
         
         label = QLabel(example_text)
