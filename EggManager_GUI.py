@@ -2074,6 +2074,9 @@ class PinManagerApp(QMainWindow):
                         return amount
                     else:
                         raise ValueError("금액 입력이 취소되었습니다.")
+                self.webview_rise()
+                pyautogui.hotkey('ctrl', 'shift', 'j')
+                time.sleep(0.2)
             
             # 최종 금액 리턴
             return int(digits_only)
