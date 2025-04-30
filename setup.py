@@ -1,5 +1,5 @@
 from cx_Freeze import setup, Executable
-versions = '1.2.6'
+versions = '1.2.7'
 
 build_exe_options = {
     "packages": ["comtypes"],
