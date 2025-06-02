@@ -25,7 +25,7 @@ import shutil
 import subprocess
 import tempfile
 
-current_version = "1.2.7"  # 현재 버전
+current_version = "1.2.8"  # 현재 버전
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
@@ -816,6 +816,13 @@ class PinManagerApp(QMainWindow):
 
         bottom_layout.addStretch(1)
 
+        btn_restore = QPushButton("결제 실패시 - PIN 복구", self)
+        btn_restore.clicked.connect(self.restore_pins)
+        btn_restore.setToolTip("로그 파일로부터 PIN 목록을 복구합니다.")
+        bottom_layout.addWidget(btn_restore)
+
+        bottom_layout.addSpacing(10)
+
         btn_quit = QPushButton("종료", self)
         btn_quit.clicked.connect(self.close)
         bottom_layout.addWidget(btn_quit)
@@ -1316,6 +1323,10 @@ class PinManagerApp(QMainWindow):
     def contextMenuEvent(self, event):
         context_menu = QMenu(self)
 
+        copy_pin_action = QAction("PIN 복사", self)
+        copy_pin_action.triggered.connect(self.copy_pin_to_clipboard)
+        context_menu.addAction(copy_pin_action)
+
         add_action = QAction("PIN 추가", self)
         add_action.triggered.connect(self.add_pin)
         context_menu.addAction(add_action)
@@ -1343,6 +1354,17 @@ class PinManagerApp(QMainWindow):
 
         context_menu.exec(self.mapToGlobal(event.pos()))
 
+    def copy_pin_to_clipboard(self):
+        """선택된 PIN을 클립보드에 복사합니다"""
+        selected_items = self.table.currentItem()
+        if not selected_items:
+            QMessageBox.warning(self, "오류", "복사할 PIN을 선택해 주세요.")
+            return
+        # 선택된 PIN의 행에서 PIN 번호를 가져옵니다
+        pin = self.table.item(selected_items.row(), 0).text()
+        # 클립보드에 PIN 번호를 복사합니다
+        pyperclip.copy(pin)
+        
     def toggle_selected_pin_lock(self):
         """선택된 핀의 잠금 상태를 토글합니다"""
         selected_items = self.table.selectedItems()
