@@ -25,7 +25,7 @@ import shutil
 import subprocess
 import tempfile
 
-current_version = "1.2.9"  # 현재 버전
+current_version = "1.3.0"  # 현재 버전
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
@@ -1734,32 +1734,15 @@ class PinManagerApp(QMainWindow):
         
         try:
             # 1️⃣ HAOPLAY 창 핸들 찾기
-            haoplay_hwnd = user32.FindWindowW(None, "HAOPLAY")
-            if haoplay_hwnd:
-                # 2️⃣ "Chrome_WidgetWin_0" 컨트롤 핸들 찾기 (웹뷰 컨트롤)
-                webview_hwnd = user32.FindWindowExW(haoplay_hwnd, 0, "Chrome_WidgetWin_0", None)
-                if not webview_hwnd:
-                    app = Application(backend="uia").connect(title_re=".*HAOPLAY.*")
-                    haoplay_window = app.window(title_re=".*HAOPLAY.*")
-                    if not haoplay_window.exists():
-                        return "❌ HAOPLAY 창을 찾을 수 없습니다."
-                    webview_control = haoplay_window.child_window(class_name_re="Chrome_WidgetWin_1", control_type="Pane").wrapper_object()
-                    if not webview_control:
-                        return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
-                    webview_control.set_focus()
-                # print(f"✅ 웹뷰 컨트롤 핸들 찾음: {webview_hwnd}")
-                else:
-                    # 3️⃣ 창 활성화 (child_hWnd로 변경)
-                    user32.SetForegroundWindow(webview_hwnd)  # 웹뷰 컨트롤을 최상위로 활성화
-            else:
-                app = Application(backend="uia").connect(title_re=".*HAOPLAY.*")
-                haoplay_window = app.window(title_re=".*HAOPLAY.*")
-                if not haoplay_window.exists():
-                    return "❌ HAOPLAY 창을 찾을 수 없습니다."
-                webview_control = haoplay_window.child_window(class_name_re="Chrome_WidgetWin_1", control_type="Pane").wrapper_object()
-                if not webview_control:
-                    return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
-                webview_control.set_focus()  # 웹뷰 컨트롤을 활성화
+            app = Application(backend="uia").connect(title_re=".*HAOPLAY.*")
+            haoplay_window = app.window(title_re=".*HAOPLAY.*")
+            if not haoplay_window.exists():
+                return "❌ HAOPLAY 창을 찾을 수 없습니다."
+            webview_control = haoplay_window.child_window(class_name_re="BrowserRootView", control_type="Pane").wrapper_object()
+            if not webview_control:
+                return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
+            webview_control.set_focus()  # 웹뷰 컨트롤을 활성화
+
             time.sleep(0.5)  # 안정성을 위해 대기
             
             pyautogui.hotkey('ctrl', 'shift', 'j')  # DevTools 열기
@@ -1846,35 +1829,18 @@ class PinManagerApp(QMainWindow):
         total_used = 0
         new_log_entry = ""
         pins_used_info = []  # 통계 로그용 정보 수집
+        print("🔔 자동 사용 시작")
 
         try:
             # 1️⃣ HAOPLAY 창 핸들 찾기
-            haoplay_hwnd = user32.FindWindowW(None, "HAOPLAY")
-            if haoplay_hwnd:
-                # 2️⃣ "Chrome_WidgetWin_0" 컨트롤 핸들 찾기 (웹뷰 컨트롤)
-                webview_hwnd = user32.FindWindowExW(haoplay_hwnd, 0, "Chrome_WidgetWin_0", None)
-                if not webview_hwnd:
-                    app = Application(backend="uia").connect(title_re=".*HAOPLAY.*")
-                    haoplay_window = app.window(title_re=".*HAOPLAY.*")
-                    if not haoplay_window.exists():
-                        return "❌ HAOPLAY 창을 찾을 수 없습니다."
-                    webview_control = haoplay_window.child_window(class_name_re="Chrome_WidgetWin_1", control_type="Pane").wrapper_object()
-                    if not webview_control:
-                        return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
-                    webview_control.set_focus()
-                # print(f"✅ 웹뷰 컨트롤 핸들 찾음: {webview_hwnd}")
-                else:
-                    # 3️⃣ 창 활성화 (child_hWnd로 변경)
-                    user32.SetForegroundWindow(webview_hwnd)  # 웹뷰 컨트롤을 최상위로 활성화
-            else:
-                app = Application(backend="uia").connect(title_re=".*HAOPLAY.*")
-                haoplay_window = app.window(title_re=".*HAOPLAY.*")
-                if not haoplay_window.exists():
-                    return "❌ HAOPLAY 창을 찾을 수 없습니다."
-                webview_control = haoplay_window.child_window(class_name_re="Chrome_WidgetWin_1", control_type="Pane").wrapper_object()
-                if not webview_control:
-                    return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
-                webview_control.set_focus()  # 웹뷰 컨트롤을 활성화
+            app = Application(backend="uia").connect(title_re=".*HAOPLAY.*")
+            haoplay_window = app.window(title_re=".*HAOPLAY.*")
+            if not haoplay_window.exists():
+                return "❌ HAOPLAY 창을 찾을 수 없습니다."
+            webview_control = haoplay_window.child_window(class_name_re="BrowserRootView", control_type="Pane").wrapper_object()
+            if not webview_control:
+                return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
+            webview_control.set_focus()  # 웹뷰 컨트롤을 활성화
 
             time.sleep(0.5)  # 안정성을 위해 대기
             
@@ -2038,21 +2004,6 @@ class PinManagerApp(QMainWindow):
                 return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
             webview_control.set_focus()  # 웹뷰 컨트롤을 활성화
         time.sleep(0.5)  # 안정성을 위해 대기
-
-    # def pywebview_rise(self):
-    #     """Pyautogui 웹뷰를 활성화하는 함수"""
-    #     try:
-    #         app = Application(backend="uia").connect(title_re=".*HAOPLAY.*")
-    #         haoplay_window = app.window(title_re=".*HAOPLAY.*")
-    #         if not haoplay_window.exists():
-    #             return "❌ HAOPLAY 창을 찾을 수 없습니다."
-    #         haoplay_window.set_focus()  # HAOPLAY 창을 활성화
-    #         webview_control = haoplay_window.child_window(class_name_re="Chrome_WidgetWin_1", control_type="Pane").wrapper_object()
-    #         if not webview_control:
-    #             return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
-    #         webview_control.set_focus()  # 웹뷰 컨트롤을 활성화 
-    #     except Exception as e:
-    #         return f"❌ 웹뷰 활성화 실패: {str(e)}"
 
     def find_amount(self):
         """금액을 추출하는 향상된 함수"""
