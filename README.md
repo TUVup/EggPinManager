@@ -9,7 +9,11 @@
 
 [최신 버전 다운로드](https://github.com/TUVup/EggPinManager/releases/latest)
 
+[MAC OS Version](https://github.com/minwookim/EggPinManagerForMac) by minwookim
+
 **※PIN 자동 사용 전에 에그머니 결제창에서 ctrl+shitf+j를 눌러 콘솔창을 띄운뒤 allow pasting(안될시 한글로 붙여넣기 허용 또는 {PH1} 입력)을 입력하고 엔터를 누르면 콘솔창에 붙여넣기가 허용됩니다. 최초에 단 한번만 하면 되고 인게임 자동사용 기능을 사용하고 싶으신 분은 반드시 해주세요.**
+
+**바뀐 결제창에서 자동입력방지문자를 먼저 입력하고 자동사용 하면 정상작동 합니다**
 
 ## 주요 기능
 - **PIN 추가 및 삭제**: 새로운 PIN을 등록하거나 기존 PIN을 삭제할 수 있습니다.
