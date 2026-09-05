@@ -9,7 +9,6 @@ from datetime import datetime
 import pyautogui
 import webbrowser
 import requests
-from github import Github
 from PySide6.QtWidgets import *
 from PySide6.QtCore import *
 from PySide6.QtGui import *
@@ -25,11 +24,10 @@ import zipfile
 import shutil
 import subprocess
 import tempfile
-import hashlib
-from packaging.version import InvalidVersion, Version
 
 current_version = "1.3.1"  # 현재 버전
 config = cp.ConfigParser()
+config_lock = threading.Lock()
 
 # Windows API 함수 로드
 user32 = ctypes.windll.user32
@@ -52,6 +50,8 @@ def config_read():
             'last_check': '0',  # 마지막 업데이트 확인 시간 (UNIX 타임스탬프)
             'check_interval': '86400',  # 업데이트 확인 간격 (초 단위, 기본 1일)
             'skip_version': '',  # 건너뛸 버전
+            'last_status': 'never',
+            'last_version': '',
         }
     }
     
@@ -94,50 +94,93 @@ class AutoUpdater:
         self.current_version = f"v{current_version}"
         self.parent = parent
         self.github_api_url = "https://api.github.com/repos/TUVup/EggPinManager/releases/latest"
-        self.github_download_url = None
-        self.expected_digest = None
-        self.downloaded_asset_name = None
+        self.github_download_url = "https://github.com/TUVup/EggPinManager/releases/latest/download/EggManager.zip"
         self.update_in_progress = False
         self.temp_dir = None
         self.update_thread = None
         self.cancel_requested = False  # 취소 요청 플래그 추가
         self.download_thread = None  # 다운로드 스레드 참조 추가
         self.update_completed = False  # 업데이트 완료 플래그 추가
+        self._finalize_previous_update()
 
-    def _version(self, value):
-        """GitHub 태그의 v 접두사를 제거하고 비교 가능한 버전으로 변환합니다."""
-        return Version(str(value).lstrip("vV"))
+    def _current_dir(self):
+        return os.path.abspath(os.path.dirname(sys.argv[0]))
 
-    def _get_latest_release(self):
-        token = os.environ.get("GITHUB_TOKEN")
-        github = Github(
-            login_or_token=token,
-            timeout=20,
-            retry=3,
-            per_page=30
+    def _update_state_path(self):
+        return os.path.join(self._current_dir(), "resource", "update_state.json")
+
+    def _write_update_state(self, status, target_version, error=None):
+        """업데이트 시도를 원자적으로 기록한다."""
+        state_path = self._update_state_path()
+        os.makedirs(os.path.dirname(state_path), exist_ok=True)
+        state = {
+            "status": status,
+            "target_version": target_version,
+            "previous_version": self.current_version,
+            "updated_at": time.time(),
+        }
+        if error:
+            state["error"] = str(error)
+
+        fd, temp_path = tempfile.mkstemp(
+            prefix="update_state_", suffix=".tmp", dir=os.path.dirname(state_path)
         )
         try:
-            repository = github.get_repo("TUVup/EggPinManager")
-            release = repository.get_latest_release()
-            if release.draft or release.prerelease:
-                raise RuntimeError("안정 릴리스가 없습니다.")
-
-            asset = next(
-                (
-                    item for item in release.get_assets()
-                    if item.name.lower() == "eggmanager.zip"
-                ),
-                None
-            )
-            if asset is None or not asset.browser_download_url:
-                raise RuntimeError("GitHub 릴리스에 EggManager.zip이 없습니다.")
-
-            self.github_download_url = asset.browser_download_url
-            self.expected_digest = getattr(asset, "digest", None)
-            self.downloaded_asset_name = asset.name
-            return release
+            with os.fdopen(fd, "w", encoding="utf-8") as state_file:
+                json.dump(state, state_file, ensure_ascii=False, indent=2)
+                state_file.flush()
+                os.fsync(state_file.fileno())
+            os.replace(temp_path, state_path)
         finally:
-            github.close()
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    def _finalize_previous_update(self):
+        """이전 실행이 남긴 업데이트 상태를 현재 실행 결과로 확정한다."""
+        state_path = self._update_state_path()
+        try:
+            with open(state_path, "r", encoding="utf-8") as state_file:
+                state = json.load(state_file)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return
+
+        if state.get("status") != "pending":
+            return
+
+        target_version = state.get("target_version", "")
+        if target_version == self.current_version:
+            self._write_update_state("success", target_version)
+            self._record_update_status("success", target_version)
+        else:
+            self._write_update_state("failed", target_version, "새 버전 실행 확인 실패")
+            self._record_update_status("failed", target_version, "새 버전 실행 확인 실패")
+
+    def _record_update_status(self, status, version="", error=None):
+        """업데이트 확인ㆍ설치 결과를 설정 파일에 남긴다."""
+        with config_lock:
+            if "UPDATE" not in config:
+                config["UPDATE"] = {}
+            config["UPDATE"]["last_status"] = status
+            if status == "checked":
+                config["UPDATE"]["last_check"] = str(int(time.time()))
+            if version:
+                config["UPDATE"]["last_version"] = version
+            if error:
+                config["UPDATE"]["last_error"] = str(error)
+            else:
+                config["UPDATE"].pop("last_error", None)
+
+            config_path = os.path.abspath("config.ini")
+            fd, temp_path = tempfile.mkstemp(prefix="config_", suffix=".tmp", dir=os.path.dirname(config_path) or ".")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as config_file:
+                    config.write(config_file)
+                    config_file.flush()
+                    os.fsync(config_file.fileno())
+                os.replace(temp_path, config_path)
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
     
     def check_for_updates_async(self, silent=False):
         """백그라운드 스레드에서 업데이트 확인"""
@@ -157,9 +200,13 @@ class AutoUpdater:
         self.update_in_progress = True
         try:
             # 최신 버전 정보 가져오기
-            latest_release = self._get_latest_release()
-            latest_version = latest_release.tag_name
-            release_notes = latest_release.body or "업데이트 내용이 제공되지 않았습니다."
+            response = requests.get(self.github_api_url, timeout=10)
+            response.raise_for_status()
+            
+            latest_release = response.json()
+            latest_version = latest_release["tag_name"]
+            release_notes = latest_release.get("body", "업데이트 내용이 제공되지 않았습니다.")
+            self._record_update_status("checked", latest_version)
 
             skip_version = config['UPDATE'].get('skip_version', '')
 
@@ -174,14 +221,10 @@ class AutoUpdater:
                         Q_ARG(str, f"버전 {latest_version}은(는) 건너뛰기로 설정되어 있습니다.")
                     )
                 self.update_in_progress = False
+                self._record_update_status("skipped", latest_version)
                 return
             
-            try:
-                is_current = self._version(latest_version) == self._version(self.current_version)
-            except InvalidVersion as error:
-                raise RuntimeError(f"버전 형식이 올바르지 않습니다: {latest_version}") from error
-
-            if is_current:
+            if latest_version == self.current_version:
                 if not silent:
                     QMetaObject.invokeMethod(
                         self.parent, 
@@ -191,6 +234,7 @@ class AutoUpdater:
                         Q_ARG(str, "현재 최신 버전입니다.")
                     )
                 self.update_in_progress = False
+                self._record_update_status("current", latest_version)
                 return
             
             # 업데이트 가능한 버전이 있는 경우
@@ -206,12 +250,14 @@ class AutoUpdater:
             
             if result != QMessageBox.Yes:
                 self.update_in_progress = False
+                self._record_update_status("cancelled", latest_version)
                 return
             
             # 업데이트 파일 다운로드 및 설치
             self._download_and_install_update(latest_version)
             
         except Exception as e:
+            self._record_update_status("failed", locals().get("latest_version", ""), e)
             if not silent and not self.cancel_requested:
                 QMetaObject.invokeMethod(
                     self.parent,
@@ -246,9 +292,6 @@ class AutoUpdater:
                 self.update_in_progress = False
                 return
             
-            if not os.path.isfile(zip_path) or os.path.getsize(zip_path) == 0:
-                raise RuntimeError("업데이트 파일이 비어 있습니다.")
-
             # 업데이트 파일 압축 해제 및 설치
             QMetaObject.invokeMethod(
                 self.parent,
@@ -261,14 +304,50 @@ class AutoUpdater:
             os.makedirs(extract_dir, exist_ok=True)
             
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                self._extract_zip_safely(zip_ref, extract_dir)
+                extract_root = os.path.abspath(extract_dir)
+                members = zip_ref.infolist()
+                total_bytes = sum(member.file_size for member in members if not member.is_dir())
+                extracted_bytes = 0
+                last_progress = 60
 
-            if not any(
-                file_name.lower().endswith(".exe")
-                for root, _, files in os.walk(extract_dir)
-                for file_name in files
-            ) and getattr(sys, "frozen", False):
-                raise RuntimeError("업데이트 압축 파일에 실행 파일이 없습니다.")
+                for member in members:
+                    member_path = os.path.abspath(os.path.join(extract_root, member.filename))
+                    if os.path.commonpath([extract_root, member_path]) != extract_root:
+                        raise ValueError("업데이트 압축 파일에 허용되지 않은 경로가 포함되어 있습니다.")
+
+                    if member.is_dir():
+                        os.makedirs(member_path, exist_ok=True)
+                        continue
+
+                    os.makedirs(os.path.dirname(member_path), exist_ok=True)
+                    with zip_ref.open(member, 'r') as source, open(member_path, 'wb') as target:
+                        while True:
+                            if self.cancel_requested:
+                                raise InterruptedError("업데이트가 취소되었습니다.")
+                            chunk = source.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            target.write(chunk)
+                            extracted_bytes += len(chunk)
+                            if total_bytes:
+                                progress = 60 + int(extracted_bytes * 20 / total_bytes)
+                                if progress > last_progress:
+                                    last_progress = progress
+                                    QMetaObject.invokeMethod(
+                                        self.parent,
+                                        "update_install_progress",
+                                        Qt.QueuedConnection,
+                                        Q_ARG(int, progress),
+                                        Q_ARG(str, f"업데이트 파일 압축 해제 중... ({extracted_bytes:,} / {total_bytes:,} bytes)")
+                                    )
+
+                QMetaObject.invokeMethod(
+                    self.parent,
+                    "update_install_progress",
+                    Qt.QueuedConnection,
+                    Q_ARG(int, 80),
+                    Q_ARG(str, "업데이트 파일 검증 완료")
+                )
             
             # 취소 요청이 있는지 다시 확인
             if self.cancel_requested:
@@ -277,6 +356,15 @@ class AutoUpdater:
             
             # 업데이트 스크립트 생성
             self._create_update_script(extract_dir)
+            QMetaObject.invokeMethod(
+                self.parent,
+                "update_install_progress",
+                Qt.QueuedConnection,
+                Q_ARG(int, 80),
+                Q_ARG(str, "압축 해제 완료. 설치 프로그램에서 백업 및 파일 복사를 시작합니다.")
+            )
+            self._write_update_state("pending", version)
+            self._record_update_status("pending", version)
             
             # 애플리케이션 종료 및 업데이트 스크립트 실행
             QMetaObject.invokeMethod(
@@ -286,7 +374,16 @@ class AutoUpdater:
             )
             
         except Exception as e:
+            if self.cancel_requested:
+                self._record_update_status("cancelled", version)
+            else:
+                self._record_update_status("failed", version, e)
             if not self.cancel_requested:
+                QMetaObject.invokeMethod(
+                    self.parent,
+                    "close_update_progress",
+                    Qt.QueuedConnection
+                )
                 QMetaObject.invokeMethod(
                     self.parent,
                     "show_warning_with_copy",
@@ -302,61 +399,63 @@ class AutoUpdater:
             self.update_in_progress = False
 
     def _download_file(self, url, destination):
-        """파일을 임시 파일로 받고 검증 후 원자적으로 이동합니다."""
-        partial_path = f"{destination}.part"
-        digest = hashlib.sha256()
+        """파일 다운로드 함수 (취소 가능)"""
+        partial_path = destination + ".part"
         try:
-            headers = {"User-Agent": "EggManager-Updater"}
-            with requests.get(url, headers=headers, stream=True, timeout=(5, 120)) as response:
+            # 임시 파일에 끝까지 받은 뒤에만 최종 파일명으로 확정한다.
+            with requests.get(url, stream=True, timeout=(10, 60)) as response:
                 response.raise_for_status()
-                total_size = int(response.headers.get("content-length", 0))
+                total_size = int(response.headers.get('content-length', 0))
+                
+                # 다운로드 진행률 업데이트를 위한 변수
                 downloaded = 0
-                last_update = -5
-
-                with open(partial_path, "wb") as file:
-                    for chunk in response.iter_content(chunk_size=1024 * 128):
+                last_update = 0
+                
+                # 파일 쓰기
+                with open(partial_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
                         if self.cancel_requested:
-                            raise InterruptedError("업데이트가 취소되었습니다.")
-                        if not chunk:
-                            continue
-                        file.write(chunk)
-                        digest.update(chunk)
-                        downloaded += len(chunk)
-                        if total_size:
-                            progress = int(downloaded * 100 / total_size)
-                            if progress >= last_update + 5:
-                                last_update = progress
+                            return
+                            
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            
+                            # 진행률 업데이트 (10% 단위로)
+                            if total_size > 0:
+                                progress = int((downloaded / total_size) * 100)
+                                if progress >= last_update + 1 or downloaded == total_size:
+                                    last_update = progress
+                                    QMetaObject.invokeMethod(
+                                        self.parent,
+                                        "update_download_progress",
+                                        Qt.QueuedConnection,
+                                        Q_ARG(int, progress),
+                                        Q_ARG(int, downloaded),
+                                        Q_ARG(int, total_size)
+                                    )
+                            else:
                                 QMetaObject.invokeMethod(
                                     self.parent,
                                     "update_download_progress",
                                     Qt.QueuedConnection,
-                                    Q_ARG(int, progress)
+                                    Q_ARG(int, -1),
+                                    Q_ARG(int, downloaded),
+                                    Q_ARG(int, 0)
                                 )
-
-            if self.expected_digest:
-                algorithm, separator, expected_hash = self.expected_digest.partition(":")
-                if separator and algorithm.lower() == "sha256" and digest.hexdigest().lower() != expected_hash.lower():
-                    raise RuntimeError("업데이트 파일의 SHA-256 검증에 실패했습니다.")
-
-            os.replace(partial_path, destination)
-            QMetaObject.invokeMethod(
-                self.parent,
-                "update_download_progress",
-                Qt.QueuedConnection,
-                Q_ARG(int, 100)
-            )
-        except Exception:
+                # 다운로드 완료 시 100% 표시
+                QMetaObject.invokeMethod(
+                    self.parent,
+                    "update_download_progress",
+                    Qt.QueuedConnection,
+                    Q_ARG(int, 100),
+                    Q_ARG(int, downloaded),
+                    Q_ARG(int, total_size)
+                )
+                os.replace(partial_path, destination)
+        finally:
             if os.path.exists(partial_path):
                 os.remove(partial_path)
-            raise
-
-    def _extract_zip_safely(self, zip_ref, extract_dir):
-        root = os.path.realpath(extract_dir)
-        for member in zip_ref.infolist():
-            target = os.path.realpath(os.path.join(extract_dir, member.filename))
-            if os.path.commonpath((root, target)) != root:
-                raise RuntimeError("안전하지 않은 업데이트 압축 경로가 발견되었습니다.")
-        zip_ref.extractall(extract_dir)
     
     def cancel_update(self):
         """업데이트 취소"""
@@ -375,6 +474,7 @@ class AutoUpdater:
         """업데이트 스크립트 생성 (현재 프로세스 종료 후 파일 복사 및 재시작)"""
         script_path = os.path.join(self.temp_dir, "update_script.bat")
         current_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
+        backup_dir = os.path.join(current_dir, "backup", f"update_{int(time.time())}")
         # 실행 파일 경로 확인
         if getattr(sys, 'frozen', False):
             # 패키징된 실행 파일인 경우
@@ -395,13 +495,7 @@ class AutoUpdater:
             base_name = "python"
         
         # 새 실행 파일 찾기
-        new_exe_files = []
-        for root, _, files in os.walk(extract_dir):
-            for file_name in files:
-                if file_name.lower().endswith('.exe'):
-                    new_exe_files.append(os.path.relpath(
-                        os.path.join(root, file_name), extract_dir
-                    ))
+        new_exe_files = [f for f in os.listdir(extract_dir) if f.lower().endswith('.exe')]
         
         if new_exe_files:
             # 새 EXE 파일이 있으면 사용
@@ -427,12 +521,12 @@ class AutoUpdater:
             f.write("echo.\n")
             f.write("echo 1. 파일 백업 중...\n")
             
-            # 기존 파일 백업
-            f.write(f"if not exist \"{current_dir}\\backup\" mkdir \"{current_dir}\\backup\"\n")
-            f.write(f"xcopy \"{current_dir}\\*.json\" \"{current_dir}\\backup\" /Y /Q\n")
-            f.write(f"xcopy \"{current_dir}\\*.txt\" \"{current_dir}\\backup\" /Y /Q\n")
-            f.write(f"xcopy \"{current_dir}\\*.ini\" \"{current_dir}\\backup\" /Y /Q\n")
-            f.write(f"if exist \"{current_dir}\\resource\" xcopy \"{current_dir}\\resource\\*.json\" \"{current_dir}\\backup\" /Y /Q\n")
+            # 사용자 데이터와 리소스를 버전별 백업 폴더에 보관한다.
+            f.write(f"if not exist \"{backup_dir}\" mkdir \"{backup_dir}\"\n")
+            f.write(f"robocopy \"{current_dir}\" \"{backup_dir}\" *.json *.txt *.ini /R:2 /W:1 /NFL /NDL /NJH /NJS\n")
+            f.write("if errorlevel 8 goto rollback\n")
+            f.write(f"if exist \"{current_dir}\\resource\" robocopy \"{current_dir}\\resource\" \"{backup_dir}\\resource\" *.json /R:2 /W:1 /NFL /NDL /NJH /NJS\n")
+            f.write("if errorlevel 8 goto rollback\n")
             
             f.write("echo 완료.\n")
             f.write("echo.\n")
@@ -440,49 +534,42 @@ class AutoUpdater:
             
             # 기존 EXE 파일 삭제 (실행 중인 파일은 삭제할 수 없으므로 이름 변경)
             f.write(f"if exist \"{current_dir}\\{app_name}\" ren \"{current_dir}\\{app_name}\" \"old_{app_name}.bak\"\n")
-            f.write("if errorlevel 1 goto update_failed\n")
+            f.write("if errorlevel 1 goto rollback\n")
             
             f.write("echo 완료.\n")
             f.write("echo.\n")
             f.write("echo 3. 새 파일 복사 중...\n")
             
             # 새 파일 복사
-            f.write(f"xcopy \"{extract_dir}\\*\" \"{current_dir}\" /E /Y /Q\n")
-            f.write("if errorlevel 2 goto update_failed\n")
+            f.write(f"robocopy \"{extract_dir}\" \"{current_dir}\" /E /COPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS\n")
+            f.write("if errorlevel 8 goto rollback\n")
+            f.write(f"if not exist \"{current_dir}\\{new_exe_name}\" goto rollback\n")
             
             f.write("echo 완료.\n")
             f.write("echo.\n")
             f.write("echo 4. 새 버전 실행 준비 중...\n")
             
             # 프로그램 재시작 - 실행 파일 이름 변경 처리
-            f.write(f"if exist \"{current_dir}\\{new_exe_name}\" (\n")
-            f.write("    echo 새 버전을 시작합니다...\n")
-            f.write(f"    start \"\" \"{current_dir}\\{new_exe_name}\"\n")
-            f.write("    echo.\n")
-            f.write("    echo EggManager가 업데이트되었습니다!\n")
-            f.write(f") else (\n")
-            f.write("    echo.\n")
-            f.write("    echo 새 실행 파일을 찾을 수 없습니다.\n")
-            f.write("    echo 수동으로 프로그램을 실행해 주세요.\n")
-            f.write("    echo.\n")
-            f.write("    pause\n")
-            f.write(f")\n")
-            f.write("goto update_cleanup\n")
+            f.write("echo 새 버전을 시작합니다...\n")
+            f.write(f"start \"\" \"{current_dir}\\{new_exe_name}\"\n")
+            f.write("echo 새 버전 실행을 요청했습니다. 백업은 복구를 위해 보존됩니다.\n")
+            f.write("goto update_success\n")
 
-            f.write(":update_failed\n")
-            f.write("echo 업데이트 파일 복사에 실패했습니다. 이전 버전을 복구합니다.\n")
-            f.write(f"if exist \"{current_dir}\\{app_name}\" del /f /q \"{current_dir}\\{app_name}\"\n")
-            f.write(f"if exist \"{current_dir}\\old_{app_name}.bak\" ren \"{current_dir}\\old_{app_name}.bak\" \"{app_name}\"\n")
-            f.write("echo 이전 버전이 복구되었습니다.\n")
+            # 복사 실패 시 기존 실행 파일과 사용자 데이터를 복구한다.
+            f.write(":rollback\n")
+            f.write("echo.\n")
+            f.write("echo 업데이트 실패: 이전 상태를 복구하는 중...\n")
+            f.write(f"if exist \"{backup_dir}\" robocopy \"{backup_dir}\" \"{current_dir}\" *.json *.txt *.ini /R:2 /W:1 /NFL /NDL /NJH /NJS\n")
+            f.write(f"if exist \"{backup_dir}\\resource\" robocopy \"{backup_dir}\\resource\" \"{current_dir}\\resource\" *.json /R:2 /W:1 /NFL /NDL /NJH /NJS\n")
+            f.write(f"if exist \"{current_dir}\\old_{app_name}.bak\" move /Y \"{current_dir}\\old_{app_name}.bak\" \"{current_dir}\\{app_name}\" >nul\n")
+            f.write("echo 복구가 완료되었습니다. 기존 프로그램을 다시 실행해 주세요.\n")
             f.write("pause\n")
+            f.write("exit /b 1\n")
 
-            f.write(":update_cleanup\n")
-            
-            # 백업 파일 정리 (나중에 삭제)
+            f.write(":update_success\n")
             f.write("echo.\n")
             f.write("echo 5. 임시 파일 정리 중...\n")
-            f.write(f"timeout /t 3 /nobreak >nul\n")
-            f.write(f"if exist \"{current_dir}\\old_{app_name}.bak\" del \"{current_dir}\\old_{app_name}.bak\"\n")
+            f.write("echo 업데이트 백업은 복구를 위해 유지됩니다.\n")
             
             f.write("echo 완료!\n")
             f.write("echo.\n")
@@ -1009,10 +1096,11 @@ class PinManagerApp(QMainWindow):
     @Slot(str, str)
     def show_download_progress(self, url, path):
         """다운로드 진행 상황 다이얼로그 표시 (취소 버튼 기능 추가)"""
-        self.progress_dialog = QProgressDialog("업데이트 파일 다운로드 중...", "취소", 0, 100, self)
+        self.progress_dialog = QProgressDialog("업데이트 파일 다운로드 중...", "취소", 0, 60, self)
         self.progress_dialog.setWindowTitle("다운로드")
         self.progress_dialog.setWindowModality(Qt.WindowModal)
-        self.progress_dialog.setAutoClose(True)
+        self.progress_dialog.setAutoClose(False)
+        self.progress_dialog.setAutoReset(False)
         self.progress_dialog.setMinimumDuration(0)
         
         # 취소 버튼 연결
@@ -1023,21 +1111,26 @@ class PinManagerApp(QMainWindow):
         # 취소 요청 시 실행할 함수 정의
         self.progress_dialog.show()
         
-        # 진행 상황 업데이트를 위한 타이머 설정
-        self.download_timer = QTimer(self)
-        self.download_timer.timeout.connect(lambda: self.progress_dialog.setValue(self.progress_dialog.value() + 5 if self.progress_dialog.value() < 95 else 95))
-        self.download_timer.start(200)  # 200ms마다 업데이트
-        
         return QDialog.Accepted  # 다이얼로그 표시 성공
     
-    @Slot(int)
-    def update_download_progress(self, progress):
+    @Slot(int, int, int)
+    def update_download_progress(self, progress, downloaded, total_size):
         """다운로드 진행 상황 업데이트"""
         if hasattr(self, 'progress_dialog') and self.progress_dialog:
-            self.progress_dialog.setValue(progress)
+            if total_size > 0:
+                overall_progress = min(60, int(progress * 0.6))
+                self.progress_dialog.setRange(0, 60)
+                self.progress_dialog.setValue(overall_progress)
+                self.progress_dialog.setLabelText(
+                    f"업데이트 파일 다운로드 중... ({downloaded:,} / {total_size:,} bytes, {progress}%)"
+                )
+            else:
+                self.progress_dialog.setRange(0, 0)
+                self.progress_dialog.setLabelText(
+                    f"업데이트 파일 다운로드 중... ({downloaded:,} bytes 수신)"
+                )
 
-            if progress >= 100 and hasattr(self, 'download_timer'):
-                self.download_timer.stop()
+            if progress >= 100:
                 self.download_completed = True  # 다운로드 완료 플래그 설정
 
     def cancel_download(self):
@@ -1046,9 +1139,6 @@ class PinManagerApp(QMainWindow):
         if hasattr(self, 'download_completed') and self.download_completed:
             return
 
-        if hasattr(self, 'download_timer') and self.download_timer.isActive():
-            self.download_timer.stop()
-        
         # AutoUpdater에 취소 요청 전달
         self.auto_updater.cancel_update()
         
@@ -1064,21 +1154,32 @@ class PinManagerApp(QMainWindow):
     def show_install_progress(self):
         """설치 진행 상황 다이얼로그 표시"""
         if hasattr(self, 'progress_dialog') and self.progress_dialog:
-            self.progress_dialog.setLabelText("업데이트 파일 설치 중...")
-            self.progress_dialog.setValue(100)
+            self.progress_dialog.setRange(0, 100)
+            self.progress_dialog.setLabelText("업데이트 파일 압축 해제 중...")
+            self.progress_dialog.setValue(60)
             # 취소 버튼 비활성화 - 설치 단계에서는 취소 불가
             self.download_completed = True
             self.progress_dialog.setCancelButtonText("설치 중...")
             self.progress_dialog.setCancelButton(None)
-            self.auto_updater.update_completed = True  # 업데이트 완료 플래그 설정
         
-        if hasattr(self, 'download_timer') and self.download_timer.isActive():
-            self.download_timer.stop()
+    @Slot(int, str)
+    def update_install_progress(self, progress, message):
+        """압축 해제와 설치 준비 진행 상황을 표시한다."""
+        if hasattr(self, 'progress_dialog') and self.progress_dialog:
+            self.progress_dialog.setValue(progress)
+            self.progress_dialog.setLabelText(f"{message} ({progress}%)")
+
+    @Slot()
+    def close_update_progress(self):
+        """업데이트 오류 시 진행 대화상자를 닫는다."""
+        if hasattr(self, 'progress_dialog') and self.progress_dialog:
+            self.progress_dialog.close()
 
     @Slot()
     def restart_for_update(self):
         """업데이트 후 재시작"""
         if hasattr(self, 'progress_dialog') and self.progress_dialog:
+            self.progress_dialog.setLabelText("새 버전 실행 프로그램을 시작하는 중...")
             self.progress_dialog.close()
         
         # 업데이트 확인
@@ -1724,7 +1825,7 @@ class PinManagerApp(QMainWindow):
         elif clicked_button == ingame:
             ok = QMessageBox.question(self, "인게임 결제", "인게임 자동 결제를 사용하시겠습니까?")
             if ok == QMessageBox.Yes:
-                QMessageBox.information(self, "보안문자 입력", "보안문자를 입력하고 OK를 눌러주세요")
+                QMessageBox.information(self, "보안문자 입력", "보안문자 입력창에 보안문자를 입력하고 확인 버튼을 눌러주세요.")
                 result = self.use_pins_auto()
                 if isinstance(result, str) and ("❌" in result or "오류" in result or "실패" in result):
                     self.show_warning_with_copy("오류", result)
@@ -1809,19 +1910,8 @@ class PinManagerApp(QMainWindow):
         pins_used_info = []  # 통계 로그용 정보 수집
         
         try:
-            # 1️⃣ HAOPLAY 창 핸들 찾기
-            haoplay_hwnd = user32.FindWindowW(None, "HAOPLAY")
-            if not haoplay_hwnd:
-                return "❌ HAOPLAY 창을 찾을 수 없습니다."
-            haoplay_window = Desktop(backend="uia").window(handle=haoplay_hwnd)
-            haoplay_window.wait("exists ready", timeout=2)
-
-            webview_control = haoplay_window.child_window(
-                class_name_re=r"BrowserRootView|Chrome_WidgetWin_1",
-                control_type="Pane"
-            ).wrapper_object()
-
-            webview_control.set_focus()
+            if not self.webview_rise():
+                return f"❌ {self.webview_error}"
             
             time.sleep(0.5)  # 안정성을 위해 대기
             
@@ -2530,8 +2620,17 @@ class PinManagerApp(QMainWindow):
                 # 좌/우 작업 표시줄의 경우 높이만 조절
                 new_height = screen_height
             
-            # 창 크기 및 위치 설정
-            win32gui.SetWindowPos(hwnd, win32con.HWND_TOP, new_x, new_y, new_width, new_height, win32con.SWP_SHOWWINDOW)
+            # 다른 권한 수준으로 실행된 창은 Z-order 변경이 거부될 수 있으므로
+            # 크기와 위치만 변경합니다.
+            win32gui.SetWindowPos(
+                hwnd,
+                0,
+                new_x,
+                new_y,
+                new_width,
+                new_height,
+                win32con.SWP_SHOWWINDOW | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
+            )
             
             # 창 활성화
             win32gui.SetForegroundWindow(hwnd)
