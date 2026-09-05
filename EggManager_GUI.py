@@ -9,12 +9,13 @@ from datetime import datetime
 import pyautogui
 import webbrowser
 import requests
+from github import Github
 from PySide6.QtWidgets import *
 from PySide6.QtCore import *
 from PySide6.QtGui import *
 import configparser as cp
 import pywinauto
-from pywinauto import Application
+from pywinauto import Application, Desktop
 from win32api import GetSystemMetrics
 import win32con
 import win32gui
@@ -24,8 +25,10 @@ import zipfile
 import shutil
 import subprocess
 import tempfile
+import hashlib
+from packaging.version import InvalidVersion, Version
 
-current_version = "1.3.0"  # 현재 버전
+current_version = "1.3.1"  # 현재 버전
 config = cp.ConfigParser()
 
 # Windows API 함수 로드
@@ -91,13 +94,50 @@ class AutoUpdater:
         self.current_version = f"v{current_version}"
         self.parent = parent
         self.github_api_url = "https://api.github.com/repos/TUVup/EggPinManager/releases/latest"
-        self.github_download_url = "https://github.com/TUVup/EggPinManager/releases/latest/download/EggManager.zip"
+        self.github_download_url = None
+        self.expected_digest = None
+        self.downloaded_asset_name = None
         self.update_in_progress = False
         self.temp_dir = None
         self.update_thread = None
         self.cancel_requested = False  # 취소 요청 플래그 추가
         self.download_thread = None  # 다운로드 스레드 참조 추가
         self.update_completed = False  # 업데이트 완료 플래그 추가
+
+    def _version(self, value):
+        """GitHub 태그의 v 접두사를 제거하고 비교 가능한 버전으로 변환합니다."""
+        return Version(str(value).lstrip("vV"))
+
+    def _get_latest_release(self):
+        token = os.environ.get("GITHUB_TOKEN")
+        github = Github(
+            login_or_token=token,
+            timeout=20,
+            retry=3,
+            per_page=30
+        )
+        try:
+            repository = github.get_repo("TUVup/EggPinManager")
+            release = repository.get_latest_release()
+            if release.draft or release.prerelease:
+                raise RuntimeError("안정 릴리스가 없습니다.")
+
+            asset = next(
+                (
+                    item for item in release.get_assets()
+                    if item.name.lower() == "eggmanager.zip"
+                ),
+                None
+            )
+            if asset is None or not asset.browser_download_url:
+                raise RuntimeError("GitHub 릴리스에 EggManager.zip이 없습니다.")
+
+            self.github_download_url = asset.browser_download_url
+            self.expected_digest = getattr(asset, "digest", None)
+            self.downloaded_asset_name = asset.name
+            return release
+        finally:
+            github.close()
     
     def check_for_updates_async(self, silent=False):
         """백그라운드 스레드에서 업데이트 확인"""
@@ -117,12 +157,9 @@ class AutoUpdater:
         self.update_in_progress = True
         try:
             # 최신 버전 정보 가져오기
-            response = requests.get(self.github_api_url, timeout=10)
-            response.raise_for_status()
-            
-            latest_release = response.json()
-            latest_version = latest_release["tag_name"]
-            release_notes = latest_release.get("body", "업데이트 내용이 제공되지 않았습니다.")
+            latest_release = self._get_latest_release()
+            latest_version = latest_release.tag_name
+            release_notes = latest_release.body or "업데이트 내용이 제공되지 않았습니다."
 
             skip_version = config['UPDATE'].get('skip_version', '')
 
@@ -139,7 +176,12 @@ class AutoUpdater:
                 self.update_in_progress = False
                 return
             
-            if latest_version == self.current_version:
+            try:
+                is_current = self._version(latest_version) == self._version(self.current_version)
+            except InvalidVersion as error:
+                raise RuntimeError(f"버전 형식이 올바르지 않습니다: {latest_version}") from error
+
+            if is_current:
                 if not silent:
                     QMetaObject.invokeMethod(
                         self.parent, 
@@ -204,6 +246,9 @@ class AutoUpdater:
                 self.update_in_progress = False
                 return
             
+            if not os.path.isfile(zip_path) or os.path.getsize(zip_path) == 0:
+                raise RuntimeError("업데이트 파일이 비어 있습니다.")
+
             # 업데이트 파일 압축 해제 및 설치
             QMetaObject.invokeMethod(
                 self.parent,
@@ -216,7 +261,14 @@ class AutoUpdater:
             os.makedirs(extract_dir, exist_ok=True)
             
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_dir)
+                self._extract_zip_safely(zip_ref, extract_dir)
+
+            if not any(
+                file_name.lower().endswith(".exe")
+                for root, _, files in os.walk(extract_dir)
+                for file_name in files
+            ) and getattr(sys, "frozen", False):
+                raise RuntimeError("업데이트 압축 파일에 실행 파일이 없습니다.")
             
             # 취소 요청이 있는지 다시 확인
             if self.cancel_requested:
@@ -250,56 +302,61 @@ class AutoUpdater:
             self.update_in_progress = False
 
     def _download_file(self, url, destination):
-        """파일 다운로드 함수 (취소 가능)"""
+        """파일을 임시 파일로 받고 검증 후 원자적으로 이동합니다."""
+        partial_path = f"{destination}.part"
+        digest = hashlib.sha256()
         try:
-            # 스트림 방식으로 다운로드 (메모리 효율적)
-            with requests.get(url, stream=True) as response:
+            headers = {"User-Agent": "EggManager-Updater"}
+            with requests.get(url, headers=headers, stream=True, timeout=(5, 120)) as response:
                 response.raise_for_status()
-                total_size = int(response.headers.get('content-length', 0))
-                
-                # 다운로드 진행률 업데이트를 위한 변수
+                total_size = int(response.headers.get("content-length", 0))
                 downloaded = 0
-                last_update = 0
-                
-                # 파일 쓰기
-                with open(destination, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
+                last_update = -5
+
+                with open(partial_path, "wb") as file:
+                    for chunk in response.iter_content(chunk_size=1024 * 128):
                         if self.cancel_requested:
-                            # 취소 요청이 있으면 중단
-                            return
-                            
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            
-                            # 진행률 업데이트 (10% 단위로)
-                            if total_size > 0:
-                                progress = int((downloaded / total_size) * 100)
-                                if progress >= last_update + 5:
-                                    last_update = progress
-                                    QMetaObject.invokeMethod(
-                                        self.parent,
-                                        "update_download_progress",
-                                        Qt.QueuedConnection,
-                                        Q_ARG(int, progress)
-                                    )
-                # 다운로드 완료 시 100% 표시
-                QMetaObject.invokeMethod(
-                    self.parent,
-                    "update_download_progress",
-                    Qt.QueuedConnection,
-                    Q_ARG(int, 100)
-                )
-        except Exception as e:
-            if not self.cancel_requested:
-                # 오류 메시지 표시 (취소된 경우 제외)
-                QMetaObject.invokeMethod(
-                    self.parent,
-                    "show_warning_with_copy",
-                    Qt.QueuedConnection,
-                    Q_ARG(str, "다운로드 오류"),
-                    Q_ARG(str, f"파일 다운로드 중 오류가 발생했습니다: {str(e)}")
-                )
+                            raise InterruptedError("업데이트가 취소되었습니다.")
+                        if not chunk:
+                            continue
+                        file.write(chunk)
+                        digest.update(chunk)
+                        downloaded += len(chunk)
+                        if total_size:
+                            progress = int(downloaded * 100 / total_size)
+                            if progress >= last_update + 5:
+                                last_update = progress
+                                QMetaObject.invokeMethod(
+                                    self.parent,
+                                    "update_download_progress",
+                                    Qt.QueuedConnection,
+                                    Q_ARG(int, progress)
+                                )
+
+            if self.expected_digest:
+                algorithm, separator, expected_hash = self.expected_digest.partition(":")
+                if separator and algorithm.lower() == "sha256" and digest.hexdigest().lower() != expected_hash.lower():
+                    raise RuntimeError("업데이트 파일의 SHA-256 검증에 실패했습니다.")
+
+            os.replace(partial_path, destination)
+            QMetaObject.invokeMethod(
+                self.parent,
+                "update_download_progress",
+                Qt.QueuedConnection,
+                Q_ARG(int, 100)
+            )
+        except Exception:
+            if os.path.exists(partial_path):
+                os.remove(partial_path)
+            raise
+
+    def _extract_zip_safely(self, zip_ref, extract_dir):
+        root = os.path.realpath(extract_dir)
+        for member in zip_ref.infolist():
+            target = os.path.realpath(os.path.join(extract_dir, member.filename))
+            if os.path.commonpath((root, target)) != root:
+                raise RuntimeError("안전하지 않은 업데이트 압축 경로가 발견되었습니다.")
+        zip_ref.extractall(extract_dir)
     
     def cancel_update(self):
         """업데이트 취소"""
@@ -338,7 +395,13 @@ class AutoUpdater:
             base_name = "python"
         
         # 새 실행 파일 찾기
-        new_exe_files = [f for f in os.listdir(extract_dir) if f.lower().endswith('.exe')]
+        new_exe_files = []
+        for root, _, files in os.walk(extract_dir):
+            for file_name in files:
+                if file_name.lower().endswith('.exe'):
+                    new_exe_files.append(os.path.relpath(
+                        os.path.join(root, file_name), extract_dir
+                    ))
         
         if new_exe_files:
             # 새 EXE 파일이 있으면 사용
@@ -377,6 +440,7 @@ class AutoUpdater:
             
             # 기존 EXE 파일 삭제 (실행 중인 파일은 삭제할 수 없으므로 이름 변경)
             f.write(f"if exist \"{current_dir}\\{app_name}\" ren \"{current_dir}\\{app_name}\" \"old_{app_name}.bak\"\n")
+            f.write("if errorlevel 1 goto update_failed\n")
             
             f.write("echo 완료.\n")
             f.write("echo.\n")
@@ -384,6 +448,7 @@ class AutoUpdater:
             
             # 새 파일 복사
             f.write(f"xcopy \"{extract_dir}\\*\" \"{current_dir}\" /E /Y /Q\n")
+            f.write("if errorlevel 2 goto update_failed\n")
             
             f.write("echo 완료.\n")
             f.write("echo.\n")
@@ -402,6 +467,16 @@ class AutoUpdater:
             f.write("    echo.\n")
             f.write("    pause\n")
             f.write(f")\n")
+            f.write("goto update_cleanup\n")
+
+            f.write(":update_failed\n")
+            f.write("echo 업데이트 파일 복사에 실패했습니다. 이전 버전을 복구합니다.\n")
+            f.write(f"if exist \"{current_dir}\\{app_name}\" del /f /q \"{current_dir}\\{app_name}\"\n")
+            f.write(f"if exist \"{current_dir}\\old_{app_name}.bak\" ren \"{current_dir}\\old_{app_name}.bak\" \"{app_name}\"\n")
+            f.write("echo 이전 버전이 복구되었습니다.\n")
+            f.write("pause\n")
+
+            f.write(":update_cleanup\n")
             
             # 백업 파일 정리 (나중에 삭제)
             f.write("echo.\n")
@@ -1649,6 +1724,7 @@ class PinManagerApp(QMainWindow):
         elif clicked_button == ingame:
             ok = QMessageBox.question(self, "인게임 결제", "인게임 자동 결제를 사용하시겠습니까?")
             if ok == QMessageBox.Yes:
+                QMessageBox.information(self, "보안문자 입력", "보안문자를 입력하고 OK를 눌러주세요")
                 result = self.use_pins_auto()
                 if isinstance(result, str) and ("❌" in result or "오류" in result or "실패" in result):
                     self.show_warning_with_copy("오류", result)
@@ -1734,15 +1810,19 @@ class PinManagerApp(QMainWindow):
         
         try:
             # 1️⃣ HAOPLAY 창 핸들 찾기
-            app = Application(backend="uia").connect(title_re=".*HAOPLAY.*")
-            haoplay_window = app.window(title_re=".*HAOPLAY.*")
-            if not haoplay_window.exists():
+            haoplay_hwnd = user32.FindWindowW(None, "HAOPLAY")
+            if not haoplay_hwnd:
                 return "❌ HAOPLAY 창을 찾을 수 없습니다."
-            webview_control = haoplay_window.child_window(class_name_re="BrowserRootView", control_type="Pane").wrapper_object()
-            if not webview_control:
-                return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
-            webview_control.set_focus()  # 웹뷰 컨트롤을 활성화
+            haoplay_window = Desktop(backend="uia").window(handle=haoplay_hwnd)
+            haoplay_window.wait("exists ready", timeout=2)
 
+            webview_control = haoplay_window.child_window(
+                class_name_re=r"BrowserRootView|Chrome_WidgetWin_1",
+                control_type="Pane"
+            ).wrapper_object()
+
+            webview_control.set_focus()
+            
             time.sleep(0.5)  # 안정성을 위해 대기
             
             pyautogui.hotkey('ctrl', 'shift', 'j')  # DevTools 열기
@@ -1796,7 +1876,7 @@ class PinManagerApp(QMainWindow):
             pyperclip.copy(original_clipboard)
 
         # 사용한 핀의 잔액을 갱신하고 필요 시 PIN 삭제
-        for pin, balance in pins_to_use:
+        for pin, balance in selected_pins:
             if total_used >= amount:
                 break
             used_amount = min(balance, amount - total_used)
@@ -1833,14 +1913,8 @@ class PinManagerApp(QMainWindow):
 
         try:
             # 1️⃣ HAOPLAY 창 핸들 찾기
-            app = Application(backend="uia").connect(title_re=".*HAOPLAY.*")
-            haoplay_window = app.window(title_re=".*HAOPLAY.*")
-            if not haoplay_window.exists():
-                return "❌ HAOPLAY 창을 찾을 수 없습니다."
-            webview_control = haoplay_window.child_window(class_name_re="BrowserRootView", control_type="Pane").wrapper_object()
-            if not webview_control:
-                return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
-            webview_control.set_focus()  # 웹뷰 컨트롤을 활성화
+            if not self.webview_rise():
+                return f"❌ {self.webview_error}"
 
             time.sleep(0.5)  # 안정성을 위해 대기
             
@@ -1976,34 +2050,56 @@ class PinManagerApp(QMainWindow):
             return False
         
     def webview_rise(self):
-       # 1️⃣ HAOPLAY 창 핸들 찾기
-        haoplay_hwnd = user32.FindWindowW(None, "HAOPLAY")
-        if haoplay_hwnd:
-            # 2️⃣ "Chrome_WidgetWin_0" 컨트롤 핸들 찾기 (웹뷰 컨트롤)
-            webview_hwnd = user32.FindWindowExW(haoplay_hwnd, 0, "Chrome_WidgetWin_0", None)
-            if not webview_hwnd:
-                app = Application(backend="uia").connect(title_re=".*HAOPLAY.*")
-                haoplay_window = app.window(title_re=".*HAOPLAY.*")
-                if not haoplay_window.exists():
-                    return "❌ HAOPLAY 창을 찾을 수 없습니다."
-                webview_control = haoplay_window.child_window(class_name_re="Chrome_WidgetWin_1", control_type="Pane").wrapper_object()
-                if not webview_control:
-                    return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
-                webview_control.set_focus()
-            # print(f"✅ 웹뷰 컨트롤 핸들 찾음: {webview_hwnd}")
-            else:
-                # 3️⃣ 창 활성화 (child_hWnd로 변경)
-                user32.SetForegroundWindow(webview_hwnd)  # 웹뷰 컨트롤을 최상위로 활성화
-        else:
-            app = Application(backend="uia").connect(title_re=".*HAOPLAY.*")
-            haoplay_window = app.window(title_re=".*HAOPLAY.*")
-            if not haoplay_window.exists():
-                return "❌ HAOPLAY 창을 찾을 수 없습니다."
-            webview_control = haoplay_window.child_window(class_name_re="Chrome_WidgetWin_1", control_type="Pane").wrapper_object()
-            if not webview_control:
-                return "❌ 웹뷰 컨트롤을 찾을 수 없습니다."
-            webview_control.set_focus()  # 웹뷰 컨트롤을 활성화
-        time.sleep(0.5)  # 안정성을 위해 대기
+        self.webview_error = "HAOPLAY 창을 찾을 수 없습니다."
+
+        try:
+            haoplay_hwnd = user32.FindWindowW(None, "HAOPLAY")
+            if haoplay_hwnd:
+                exact_window = Desktop(backend="uia").window(handle=haoplay_hwnd)
+                if not exact_window.is_visible():
+                    haoplay_hwnd = 0
+
+            if not haoplay_hwnd:
+                candidates = Desktop(backend="uia").windows(
+                    title_re=r"^HAOPLAY.*$",
+                    visible_only=True
+                )
+                if len(candidates) != 1:
+                    if len(candidates) > 1:
+                        self.webview_error = f"HAOPLAY 창이 여러 개 발견되었습니다 ({len(candidates)}개)."
+                    return False
+                haoplay_hwnd = candidates[0].handle
+
+            haoplay_window = Desktop(backend="uia").window(handle=haoplay_hwnd)
+            haoplay_window.wait("exists ready", timeout=2)
+
+            webview_controls = []
+            for class_name in ("BrowserRootView", "Chrome_WidgetWin_1"):
+                webview_controls.extend(
+                    haoplay_window.descendants(
+                        class_name=class_name,
+                        control_type="Pane"
+                    )
+                )
+
+            visible_controls = [
+                control for control in webview_controls
+                if control.is_visible()
+            ]
+            if not visible_controls:
+                self.webview_error = "웹뷰 컨트롤을 찾을 수 없습니다."
+                return False
+
+            visible_controls[0].set_focus()
+            if not user32.SetForegroundWindow(haoplay_hwnd):
+                self.webview_error = "HAOPLAY 창을 활성화할 수 없습니다."
+                return False
+
+            time.sleep(0.5)
+            return True
+        except Exception as error:
+            self.webview_error = f"웹뷰 활성화 중 오류가 발생했습니다: {error}"
+            return False
 
     def find_amount(self):
         """금액을 추출하는 향상된 함수"""
@@ -2076,7 +2172,8 @@ class PinManagerApp(QMainWindow):
                 amount, ok = QInputDialog.getInt(self, "금액 수동 입력", "사용할 금액:", 
                                                 0, 0, 1000000, 1000)
                 if ok:
-                    self.webview_rise()
+                    if not self.webview_rise():
+                        raise RuntimeError(self.webview_error)
                     pyautogui.hotkey('ctrl', 'shift', 'j')
                     time.sleep(0.2)
                     return amount
@@ -2099,13 +2196,15 @@ class PinManagerApp(QMainWindow):
                     amount, ok = QInputDialog.getInt(self, "금액 수동 입력", 
                         "정확한 금액을 입력해주세요:", 0, 0, 1000000, 1000)
                     if ok:
-                        self.webview_rise()
+                        if not self.webview_rise():
+                            raise RuntimeError(self.webview_error)
                         pyautogui.hotkey('ctrl', 'shift', 'j')
                         time.sleep(0.2)
                         return amount
                     else:
                         raise ValueError("금액 입력이 취소되었습니다.")
-                self.webview_rise()
+                if not self.webview_rise():
+                    raise RuntimeError(self.webview_error)
                 pyautogui.hotkey('ctrl', 'shift', 'j')
                 time.sleep(0.2)
             
@@ -2125,7 +2224,8 @@ class PinManagerApp(QMainWindow):
             amount, ok = QInputDialog.getInt(self, "금액 수동 입력", 
                 "사용할 금액:", 0, 0, 1000000, 1000)
             if ok:
-                self.webview_rise()
+                if not self.webview_rise():
+                    raise RuntimeError(self.webview_error)
                 pyautogui.hotkey('ctrl', 'shift', 'j')
                 time.sleep(0.2)
                 return amount
